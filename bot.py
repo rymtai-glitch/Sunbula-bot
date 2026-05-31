@@ -290,22 +290,104 @@ async def rep_finish(message: Message, state: FSMContext):
         total = d["cash"]+d["kaspi"]+d["glovo"]+d["wolt"]+d["yandex"]-d["ret"]
         avg = round(total/chk) if chk>0 else 0
         dt = today()
+
+        # Save transactions
         for cat,amt in [("Cash",d["cash"]),("Kaspi QR",d["kaspi"]),("Glovo",d["glovo"]),("Wolt",d["wolt"]),("Yandex",d["yandex"])]:
             if amt>0: sb.table("transactions").insert({"id":uid(),"type":"income","amount":amt,"category":cat,"description":f"Отчет {dt}","date":dt,"created_at":datetime.utcnow().isoformat()}).execute()
+
         sb.table("daily_reports").upsert({"id":dt,"date":dt,"cash":d["cash"],"kaspi":d["kaspi"],"glovo":d["glovo"],"wolt":d["wolt"],"yandex":d["yandex"],"returns":d["ret"],"checks_count":chk,"total":total,"avg_check":avg,"created_at":datetime.utcnow().isoformat()}).execute()
+
+        # Get yesterday for comparison
+        yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
+        yest = sb.table("daily_reports").select("*").eq("date", yesterday).execute()
+        y = yest.data[0] if yest.data else None
+
+        def diff_str(today_val, yest_val):
+            if not y or yest_val == 0: return ""
+            diff = today_val - yest_val
+            pct = round(diff / yest_val * 100)
+            arrow = "📈" if diff >= 0 else "📉"
+            sign = "+" if diff >= 0 else ""
+            return f"  {arrow} {sign}{fmt(diff)} ₸ ({sign}{pct}%)"
+
+        # Month stats
         ms = dt[:7]+"-01"
         mo = sb.table("daily_reports").select("total").gte("date",ms).execute()
         mt = sum(r["total"] for r in mo.data) if mo.data else total
         dc = len(mo.data) or 1
+
+        # Category percentages
+        cats = [("💵 Наличные", d["cash"]), ("📲 Kaspi QR", d["kaspi"]),
+                ("🟢 Glovo", d["glovo"]), ("🚀 Wolt", d["wolt"]), ("🚕 Яндекс", d["yandex"])]
+        gross = d["cash"]+d["kaspi"]+d["glovo"]+d["wolt"]+d["yandex"]
+
+        cat_lines = ""
+        for name, amt in cats:
+            if amt > 0:
+                pct = round(amt/gross*100) if gross > 0 else 0
+                cat_lines += f"{name}:  <b>{fmt(amt)} ₸</b>  ({pct}%)
+"
+
+        # Comparison block
+        cmp_block = ""
+        if y:
+            y_total = y.get("total", 0)
+            diff = total - y_total
+            pct = round(diff/y_total*100) if y_total else 0
+            sign = "+" if diff >= 0 else ""
+            arrow = "📈" if diff >= 0 else "📉"
+            cmp_block = (
+                f"
+{'—'*26}
+"
+                f"<b>Сравнение со вчера ({yesterday}):</b>
+"
+                f"Вчера: {fmt(y_total)} ₸
+"
+                f"Сегодня: {fmt(total)} ₸
+"
+                f"{arrow} <b>{sign}{fmt(diff)} ₸  ({sign}{pct}%)</b>
+"
+            )
+            # Per category comparison
+            y_cats = [("💵 Наличные","cash"),("📲 Kaspi QR","kaspi"),
+                      ("🟢 Glovo","glovo"),("🚀 Wolt","wolt"),("🚕 Яндекс","yandex")]
+            today_vals = {"cash":d["cash"],"kaspi":d["kaspi"],"glovo":d["glovo"],"wolt":d["wolt"],"yandex":d["yandex"]}
+            for name, key in y_cats:
+                tv = today_vals[key]; yv = y.get(key,0) or 0
+                if tv > 0 or yv > 0:
+                    dd = tv - yv
+                    dp = round(dd/yv*100) if yv else 0
+                    sg = "+" if dd >= 0 else ""
+                    ar = "↑" if dd >= 0 else "↓"
+                    cmp_block += f"  {name}: {ar} {sg}{fmt(dd)} ₸ ({sg}{dp}%)
+"
+
         await message.answer(
-            f"✅ <b>Отчет сохранен!</b>\n\n📅 {now_s()}\n\n"
-            f"💵 Наличные:  {fmt(d['cash'])} ₸\n📲 Kaspi QR:  {fmt(d['kaspi'])} ₸\n"
-            f"🟢 Glovo:     {fmt(d['glovo'])} ₸\n🚀 Wolt:      {fmt(d['wolt'])} ₸\n"
-            f"🚕 Яндекс:    {fmt(d['yandex'])} ₸\n🔄 Возвраты:  {fmt(d['ret'])} ₸\n"
-            f"{'—'*26}\n💰 Выручка: <b>{fmt(total)} ₸</b>\n"
-            f"🧾 Чеков: {chk}  |  📊 Средний: <b>{fmt(avg)} ₸</b>\n"
-            f"{'—'*26}\n📅 Месяц: {fmt(mt)} ₸  |  Ср/день: {fmt(round(mt/dc))} ₸",
-            reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(), parse_mode="HTML")
+            f"✅ <b>Отчет сохранен!</b>
+
+"
+            f"📅 Дата: {dt}  🕐 {time_s()}
+
+"
+            f"<b>Выручка по каналам:</b>
+"
+            f"{cat_lines}"
+            f"🔄 Возвраты:  {fmt(d['ret'])} ₸
+"
+            f"{'—'*26}
+"
+            f"💰 Общая выручка: <b>{fmt(total)} ₸</b>
+"
+            f"🧾 Чеков: {chk}  |  📊 Средний чек: <b>{fmt(avg)} ₸</b>
+"
+            f"{cmp_block}"
+            f"{'—'*26}
+"
+            f"📅 Месяц: {fmt(mt)} ₸  |  Ср/день: {fmt(round(mt/dc))} ₸",
+            reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(),
+            parse_mode="HTML"
+        )
     except Exception as e:
         await message.answer(f"❌ {e}", reply_markup=main_kb_staff())
     await state.clear()

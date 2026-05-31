@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -523,6 +523,17 @@ async def invoice_finish(message: Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"❌ Ошибка: {e}", reply_markup=main_keyboard())
     await state.clear()
+
+
+# ── /myid ─────────────────────────────────────────────────────────────────────
+@dp.message(Command("myid"))
+async def myid(message: Message):
+    await message.answer(
+        f"🆔 Ваш Telegram ID: <code>{message.from_user.id}</code>\n"
+        f"👤 Имя: {message.from_user.full_name}\n\n"
+        f"Отправьте этот ID администратору.",
+        parse_mode="HTML"
+    )
 
 # ── Cancel ────────────────────────────────────────────────────────────────────
 @dp.callback_query(F.data == "cancel")

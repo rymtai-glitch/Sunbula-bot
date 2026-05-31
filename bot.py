@@ -521,6 +521,14 @@ async def sal_history(callback: CallbackQuery):
         await callback.message.answer(f"❌ {e}")
     await callback.answer()
 
+
+# ── Universal cancel handler ───────────────────────────────────────────────────
+@dp.message(F.text == "❌ Отмена")
+async def universal_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    kb = main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff()
+    await message.answer("Отменено.", reply_markup=kb)
+
 # ── Cancel callback ────────────────────────────────────────────────────────────
 @dp.callback_query(F.data == "cancel")
 async def cancel_cb(callback: CallbackQuery, state: FSMContext):

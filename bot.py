@@ -25,7 +25,7 @@ ADMIN_ID = 394382908   # @rymtayy
 
 # Сотрудники: telegram_id -> имя  (заполним когда пришлют /myid)
 STAFF = {
-    # 123456789: "Дияр",   # добавим позже
+    740516816: "Дияр",
 }
 
 # ── Employee config ──────────────────────────────────────────────────────────
@@ -68,6 +68,7 @@ def main_kb_staff():
     return ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="📦 Накладная"), KeyboardButton(text="📊 Отчет")],
         [KeyboardButton(text="🟢 Приход"),    KeyboardButton(text="🔴 Уход")],
+        [KeyboardButton(text="💰 Моя зарплата")],
     ], resize_keyboard=True)
 
 def main_kb_admin():
@@ -521,6 +522,43 @@ async def sal_history(callback: CallbackQuery):
         await callback.message.answer(f"❌ {e}")
     await callback.answer()
 
+
+
+# ── МОЯ ЗАРПЛАТА (для сотрудников) ────────────────────────────────────────────
+@dp.message(F.text == "💰 Моя зарплата")
+async def my_salary(message: Message):
+    uid_ = message.from_user.id
+    emp = get_emp_name(uid_) if not is_admin(uid_) else None
+    if not emp:
+        return await message.answer("⛔ Нет доступа.")
+    try:
+        ms = today()[:7]+"-01"
+        rows = sb.table("salary_records").select("*").eq("employee", emp).gte("date", ms).execute()
+        earned = 0; paid = 0; fines = 0; bonuses = 0; shifts = 0
+        for r in (rows.data or []):
+            rt = r.get("rate_type","")
+            if rt in ("shift","hourly","fixed"):
+                earned += r.get("salary",0) or 0
+                shifts += 1
+            elif rt == "count":
+                shifts += 1
+            elif rt == "payment": paid    += r.get("salary",0) or 0
+            elif rt == "fine":    fines   += r.get("salary",0) or 0
+            elif rt == "bonus":   bonuses += r.get("salary",0) or 0
+        debt = earned + bonuses - fines - paid
+        text = (
+            f"💰 <b>Моя зарплата — {today()[:7]}</b>\n\n"
+            f"👤 {emp}\n"
+            f"📋 Смен: {shifts}\n"
+            f"✅ Начислено: <b>{fmt(earned)} ₸</b>\n"
+        )
+        if bonuses: text += f"🎁 Премии: +{fmt(bonuses)} ₸\n"
+        if fines:   text += f"⚡ Штрафы: -{fmt(fines)} ₸\n"
+        if paid:    text += f"💸 Выплачено: {fmt(paid)} ₸\n"
+        text += f"{'—'*24}\n<b>К получению: {fmt(debt)} ₸</b>"
+        await message.answer(text, parse_mode="HTML")
+    except Exception as e:
+        await message.answer(f"❌ {e}")
 
 # ── Universal cancel handler ───────────────────────────────────────────────────
 @dp.message(F.text == "❌ Отмена")

@@ -258,31 +258,95 @@ async def co_cancel(message: Message, state: FSMContext):
     await state.clear(); await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
 
 # ── ОТЧЕТ ─────────────────────────────────────────────────────────────────────
+def parse_num(text):
+    """Parse number from user input, return None if invalid."""
+    if not text: return None
+    cleaned = text.replace(" ", "").replace(",", ".").replace("₸", "").strip()
+    try:
+        return float(cleaned)
+    except (ValueError, TypeError):
+        return None
+
+def back_kb(uid_):
+    return main_kb_admin() if is_admin(uid_) else main_kb_staff()
+
 @dp.message(F.text == "📊 Отчет")
 async def rep_start(message: Message, state: FSMContext):
+    await state.clear()
     await state.set_state(Rep.cash)
-    await message.answer("📊 <b>Дневной отчет</b>\n\nНаличные (₸):", reply_markup=cancel_kb(), parse_mode="HTML")
-
-async def rep_step(msg, state, next_s, prompt, key):
-    if msg.text=="❌ Отмена":
-        await state.clear(); return await msg.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(msg.from_user.id) else main_kb_staff())
-    try:
-        await state.update_data(**{key: float(msg.text.replace(" ","").replace(",","."))})
-        await state.set_state(next_s); await msg.answer(prompt, parse_mode="HTML")
-    except: await msg.answer("Введите число:")
+    await message.answer("📊 <b>Дневной отчет</b>\n\n💵 Введите сумму <b>Наличных</b> (₸):", reply_markup=cancel_kb(), parse_mode="HTML")
 
 @dp.message(Rep.cash)
-async def rc(m,s): await rep_step(m,s,Rep.kaspi,"Kaspi QR (₸):","cash")
+async def rep_cash(message: Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=back_kb(message.from_user.id))
+    n = parse_num(message.text)
+    if n is None:
+        return await message.answer("⚠️ Введите число (например: 50000):")
+    await state.update_data(cash=n)
+    await state.set_state(Rep.kaspi)
+    await message.answer("📲 Введите сумму <b>Kaspi QR</b> (₸):", parse_mode="HTML")
+
 @dp.message(Rep.kaspi)
-async def rk(m,s): await rep_step(m,s,Rep.glovo,"Glovo (₸):","kaspi")
+async def rep_kaspi(message: Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=back_kb(message.from_user.id))
+    n = parse_num(message.text)
+    if n is None:
+        return await message.answer("⚠️ Введите число:")
+    await state.update_data(kaspi=n)
+    await state.set_state(Rep.glovo)
+    await message.answer("🟢 Введите сумму <b>Glovo</b> (₸):", parse_mode="HTML")
+
 @dp.message(Rep.glovo)
-async def rg(m,s): await rep_step(m,s,Rep.wolt,"Wolt (₸):","glovo")
+async def rep_glovo(message: Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=back_kb(message.from_user.id))
+    n = parse_num(message.text)
+    if n is None:
+        return await message.answer("⚠️ Введите число:")
+    await state.update_data(glovo=n)
+    await state.set_state(Rep.wolt)
+    await message.answer("🚀 Введите сумму <b>Wolt</b> (₸):", parse_mode="HTML")
+
 @dp.message(Rep.wolt)
-async def rw(m,s): await rep_step(m,s,Rep.yandex,"Яндекс (₸):","wolt")
+async def rep_wolt(message: Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=back_kb(message.from_user.id))
+    n = parse_num(message.text)
+    if n is None:
+        return await message.answer("⚠️ Введите число:")
+    await state.update_data(wolt=n)
+    await state.set_state(Rep.yandex)
+    await message.answer("🚕 Введите сумму <b>Яндекс</b> (₸):", parse_mode="HTML")
+
 @dp.message(Rep.yandex)
-async def ry(m,s): await rep_step(m,s,Rep.ret,"Возвраты (₸):","yandex")
+async def rep_yandex(message: Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=back_kb(message.from_user.id))
+    n = parse_num(message.text)
+    if n is None:
+        return await message.answer("⚠️ Введите число:")
+    await state.update_data(yandex=n)
+    await state.set_state(Rep.ret)
+    await message.answer("🔄 Введите сумму <b>возвратов</b> (₸):", parse_mode="HTML")
+
 @dp.message(Rep.ret)
-async def rr(m,s): await rep_step(m,s,Rep.chk,"Количество чеков:","ret")
+async def rep_ret(message: Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=back_kb(message.from_user.id))
+    n = parse_num(message.text)
+    if n is None:
+        return await message.answer("⚠️ Введите число:")
+    await state.update_data(ret=n)
+    await state.set_state(Rep.chk)
+    await message.answer("🧾 Введите <b>количество чеков</b>:", parse_mode="HTML")
 
 @dp.message(Rep.chk)
 async def rep_finish(message: Message, state: FSMContext):

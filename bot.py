@@ -325,8 +325,7 @@ async def rep_finish(message: Message, state: FSMContext):
         for name, amt in cats:
             if amt > 0:
                 pct = round(amt/gross*100) if gross > 0 else 0
-                cat_lines += f"{name}:  <b>{fmt(amt)} ₸</b>  ({pct}%)
-"
+                cat_lines += f"{name}:  <b>{fmt(amt)} ₸</b>  ({pct}%)\n"
 
         # Comparison block
         cmp_block = ""
@@ -337,17 +336,11 @@ async def rep_finish(message: Message, state: FSMContext):
             sign = "+" if diff >= 0 else ""
             arrow = "📈" if diff >= 0 else "📉"
             cmp_block = (
-                f"
-{'—'*26}
-"
-                f"<b>Сравнение со вчера ({yesterday}):</b>
-"
-                f"Вчера: {fmt(y_total)} ₸
-"
-                f"Сегодня: {fmt(total)} ₸
-"
-                f"{arrow} <b>{sign}{fmt(diff)} ₸  ({sign}{pct}%)</b>
-"
+                f"\n{'—'*26}\n"
+                f"<b>Сравнение со вчера ({yesterday}):</b>\n"
+                f"Вчера: {fmt(y_total)} ₸\n"
+                f"Сегодня: {fmt(total)} ₸\n"
+                f"{arrow} <b>{sign}{fmt(diff)} ₸  ({sign}{pct}%)</b>\n"
             )
             # Per category comparison
             y_cats = [("💵 Наличные","cash"),("📲 Kaspi QR","kaspi"),
@@ -360,30 +353,19 @@ async def rep_finish(message: Message, state: FSMContext):
                     dp = round(dd/yv*100) if yv else 0
                     sg = "+" if dd >= 0 else ""
                     ar = "↑" if dd >= 0 else "↓"
-                    cmp_block += f"  {name}: {ar} {sg}{fmt(dd)} ₸ ({sg}{dp}%)
-"
+                    cmp_block += f"  {name}: {ar} {sg}{fmt(dd)} ₸ ({sg}{dp}%)\n"
 
         await message.answer(
-            f"✅ <b>Отчет сохранен!</b>
-
-"
-            f"📅 Дата: {dt}  🕐 {time_s()}
-
-"
-            f"<b>Выручка по каналам:</b>
-"
+            f"✅ <b>Отчет сохранен!</b>\n\n"
+            f"📅 Дата: {dt}  🕐 {time_s()}\n\n"
+            f"<b>Выручка по каналам:</b>\n"
             f"{cat_lines}"
-            f"🔄 Возвраты:  {fmt(d['ret'])} ₸
-"
-            f"{'—'*26}
-"
-            f"💰 Общая выручка: <b>{fmt(total)} ₸</b>
-"
-            f"🧾 Чеков: {chk}  |  📊 Средний чек: <b>{fmt(avg)} ₸</b>
-"
+            f"🔄 Возвраты:  {fmt(d['ret'])} ₸\n"
+            f"{'—'*26}\n"
+            f"💰 Общая выручка: <b>{fmt(total)} ₸</b>\n"
+            f"🧾 Чеков: {chk}  |  📊 Средний чек: <b>{fmt(avg)} ₸</b>\n"
             f"{cmp_block}"
-            f"{'—'*26}
-"
+            f"{'—'*26}\n"
             f"📅 Месяц: {fmt(mt)} ₸  |  Ср/день: {fmt(round(mt/dc))} ₸",
             reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(),
             parse_mode="HTML"

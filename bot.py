@@ -21,7 +21,8 @@ dp  = Dispatcher(storage=MemoryStorage())
 sb: Client = create_client(SUPA_URL, SUPA_KEY)
 
 # ── Access ───────────────────────────────────────────────────────────────────
-ADMIN_ID = 394382908   # @rymtayy
+ADMIN_ID = 394382908    # @rymtayy (главный)
+ADMIN_IDS = {394382908, 7990145871}  # все админы
 
 STAFF = {
     740516816:  "Дияр",
@@ -29,6 +30,7 @@ STAFF = {
     5442950426: "Динара",
     6854506621: "Бека",
     1123964256: "Виктория",
+    7873998822: "Нурсултан",
 }
 
 # ── Employee config ──────────────────────────────────────────────────────────
@@ -63,7 +65,7 @@ def calc_hours(t1, t2):
         return mins/60, mins
     except: return 0, 0
 
-def is_admin(uid_): return uid_ == ADMIN_ID
+def is_admin(uid_): return uid_ in ADMIN_IDS
 def get_emp_name(uid_): return STAFF.get(uid_)
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────

@@ -23,7 +23,7 @@ sb: Client = create_client(SUPA_URL, SUPA_KEY)
 # ── Access ───────────────────────────────────────────────────────────────────
 ADMIN_ID = 394382908   # @rymtayy
 
-# Сотрудники: telegram_id -> имя  (заполним когда пришлют /myid)
+# Сотрудники: telegram_id -> имя
 STAFF = {
     740516816:  "Дияр",
     805285953:  "Ансаган",
@@ -114,7 +114,7 @@ def salary_menu_kb():
 # ── States ────────────────────────────────────────────────────────────────────
 class CI(StatesGroup):   emp=State(); photo=State()
 class CO(StatesGroup):   emp=State(); photo=State()
-class Rep(StatesGroup):  cash=State(); kaspi=State(); glovo=State(); wolt=State(); yandex=State(); ret=State(); chk=State()
+class Rep(StatesGroup):  cash=State(); kaspi=State(); glovo=State(); wolt=State(); yandex=State(); ret=State(); chk=State(); cash_end=State()
 class Inv(StatesGroup):  photo=State(); store=State(); item=State(); qty=State(); price=State()
 class Sal(StatesGroup):  emp=State(); amount=State(); reason=State(); action=State()
 
@@ -259,7 +259,6 @@ async def co_cancel(message: Message, state: FSMContext):
 
 # ── ОТЧЕТ ─────────────────────────────────────────────────────────────────────
 def parse_num(text):
-    """Parse number from user input, return None if invalid."""
     if not text: return None
     cleaned = text.replace(" ", "").replace(",", ".").replace("₸", "").strip()
     try:
@@ -349,50 +348,74 @@ async def rep_ret(message: Message, state: FSMContext):
     await message.answer("🧾 Введите <b>количество чеков</b>:", parse_mode="HTML")
 
 @dp.message(Rep.chk)
+async def rep_chk(message: Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=back_kb(message.from_user.id))
+    try:
+        chk = int(message.text.replace(" ", ""))
+        await state.update_data(chk=chk)
+        await state.set_state(Rep.cash_end)
+        await message.answer("💵 Введите <b>остаток наличных на конец дня</b> (₸):", parse_mode="HTML")
+    except:
+        await message.answer("⚠️ Введите целое число:")
+
+@dp.message(Rep.cash_end)
 async def rep_finish(message: Message, state: FSMContext):
-    if message.text=="❌ Отмена":
-        await state.clear(); return await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=back_kb(message.from_user.id))
+    n = parse_num(message.text)
+    if n is None:
+        return await message.answer("⚠️ Введите число (например: 15000):")
+
     try:
         d = await state.get_data()
-        chk = int(message.text.replace(" ",""))
-        total = d["cash"]+d["kaspi"]+d["glovo"]+d["wolt"]+d["yandex"]-d["ret"]
-        avg = round(total/chk) if chk>0 else 0
+        chk = d["chk"]
+        cash_end = n
+        total = d["cash"] + d["kaspi"] + d["glovo"] + d["wolt"] + d["yandex"] - d["ret"]
+        avg = round(total / chk) if chk > 0 else 0
         dt = today()
 
         # Save transactions
-        for cat,amt in [("Cash",d["cash"]),("Kaspi QR",d["kaspi"]),("Glovo",d["glovo"]),("Wolt",d["wolt"]),("Yandex",d["yandex"])]:
-            if amt>0: sb.table("transactions").insert({"id":uid(),"type":"income","amount":amt,"category":cat,"description":f"Отчет {dt}","date":dt,"created_at":datetime.utcnow().isoformat()}).execute()
+        for cat, amt in [("Cash", d["cash"]), ("Kaspi QR", d["kaspi"]), ("Glovo", d["glovo"]),
+                         ("Wolt", d["wolt"]), ("Yandex", d["yandex"])]:
+            if amt > 0:
+                sb.table("transactions").insert({
+                    "id": uid(), "type": "income", "amount": amt,
+                    "category": cat, "description": f"Отчет {dt}",
+                    "date": dt, "created_at": datetime.utcnow().isoformat()
+                }).execute()
 
-        sb.table("daily_reports").upsert({"id":dt,"date":dt,"cash":d["cash"],"kaspi":d["kaspi"],"glovo":d["glovo"],"wolt":d["wolt"],"yandex":d["yandex"],"returns":d["ret"],"checks_count":chk,"total":total,"avg_check":avg,"created_at":datetime.utcnow().isoformat()}).execute()
+        sb.table("daily_reports").upsert({
+            "id": dt, "date": dt,
+            "cash": d["cash"], "kaspi": d["kaspi"], "glovo": d["glovo"],
+            "wolt": d["wolt"], "yandex": d["yandex"],
+            "returns": d["ret"], "checks_count": chk,
+            "total": total, "avg_check": avg,
+            "cash_end": cash_end,
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
 
-        # Get yesterday for comparison
+        # Yesterday comparison
         yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
         yest = sb.table("daily_reports").select("*").eq("date", yesterday).execute()
         y = yest.data[0] if yest.data else None
 
-        def diff_str(today_val, yest_val):
-            if not y or yest_val == 0: return ""
-            diff = today_val - yest_val
-            pct = round(diff / yest_val * 100)
-            arrow = "📈" if diff >= 0 else "📉"
-            sign = "+" if diff >= 0 else ""
-            return f"  {arrow} {sign}{fmt(diff)} ₸ ({sign}{pct}%)"
-
         # Month stats
-        ms = dt[:7]+"-01"
-        mo = sb.table("daily_reports").select("total").gte("date",ms).execute()
+        ms = dt[:7] + "-01"
+        mo = sb.table("daily_reports").select("total").gte("date", ms).execute()
         mt = sum(r["total"] for r in mo.data) if mo.data else total
         dc = len(mo.data) or 1
 
-        # Category percentages
+        # Category lines
         cats = [("💵 Наличные", d["cash"]), ("📲 Kaspi QR", d["kaspi"]),
                 ("🟢 Glovo", d["glovo"]), ("🚀 Wolt", d["wolt"]), ("🚕 Яндекс", d["yandex"])]
-        gross = d["cash"]+d["kaspi"]+d["glovo"]+d["wolt"]+d["yandex"]
-
+        gross = sum(a for _, a in cats)
         cat_lines = ""
         for name, amt in cats:
             if amt > 0:
-                pct = round(amt/gross*100) if gross > 0 else 0
+                pct = round(amt / gross * 100) if gross > 0 else 0
                 cat_lines += f"{name}:  <b>{fmt(amt)} ₸</b>  ({pct}%)\n"
 
         # Comparison block
@@ -400,7 +423,7 @@ async def rep_finish(message: Message, state: FSMContext):
         if y:
             y_total = y.get("total", 0)
             diff = total - y_total
-            pct = round(diff/y_total*100) if y_total else 0
+            pct = round(diff / y_total * 100) if y_total else 0
             sign = "+" if diff >= 0 else ""
             arrow = "📈" if diff >= 0 else "📉"
             cmp_block = (
@@ -410,18 +433,18 @@ async def rep_finish(message: Message, state: FSMContext):
                 f"Сегодня: {fmt(total)} ₸\n"
                 f"{arrow} <b>{sign}{fmt(diff)} ₸  ({sign}{pct}%)</b>\n"
             )
-            # Per category comparison
-            y_cats = [("💵 Наличные","cash"),("📲 Kaspi QR","kaspi"),
-                      ("🟢 Glovo","glovo"),("🚀 Wolt","wolt"),("🚕 Яндекс","yandex")]
-            today_vals = {"cash":d["cash"],"kaspi":d["kaspi"],"glovo":d["glovo"],"wolt":d["wolt"],"yandex":d["yandex"]}
+            y_cats = [("💵 Наличные", "cash"), ("📲 Kaspi QR", "kaspi"),
+                      ("🟢 Glovo", "glovo"), ("🚀 Wolt", "wolt"), ("🚕 Яндекс", "yandex")]
+            today_vals = {"cash": d["cash"], "kaspi": d["kaspi"], "glovo": d["glovo"],
+                          "wolt": d["wolt"], "yandex": d["yandex"]}
             for name, key in y_cats:
-                tv = today_vals[key]; yv = y.get(key,0) or 0
+                tv = today_vals[key]; yv = y.get(key, 0) or 0
                 if tv > 0 or yv > 0:
                     dd = tv - yv
-                    dp = round(dd/yv*100) if yv else 0
+                    dp2 = round(dd / yv * 100) if yv else 0
                     sg = "+" if dd >= 0 else ""
                     ar = "↑" if dd >= 0 else "↓"
-                    cmp_block += f"  {name}: {ar} {sg}{fmt(dd)} ₸ ({sg}{dp}%)\n"
+                    cmp_block += f"  {name}: {ar} {sg}{fmt(dd)} ₸ ({sg}{dp2}%)\n"
 
         await message.answer(
             f"✅ <b>Отчет сохранен!</b>\n\n"
@@ -432,9 +455,10 @@ async def rep_finish(message: Message, state: FSMContext):
             f"{'—'*26}\n"
             f"💰 Общая выручка: <b>{fmt(total)} ₸</b>\n"
             f"🧾 Чеков: {chk}  |  📊 Средний чек: <b>{fmt(avg)} ₸</b>\n"
+            f"💵 Остаток наличных: <b>{fmt(cash_end)} ₸</b>\n"
             f"{cmp_block}"
             f"{'—'*26}\n"
-            f"📅 Месяц: {fmt(mt)} ₸  |  Ср/день: {fmt(round(mt/dc))} ₸",
+            f"📅 Месяц: {fmt(mt)} ₸  |  Ср/день: {fmt(round(mt / dc))} ₸",
             reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(),
             parse_mode="HTML"
         )
@@ -530,7 +554,9 @@ async def archive(message: Message):
             return await message.answer("Отчетов пока нет.")
         text = "📋 <b>Последние 10 отчетов:</b>\n\n"
         for r in rows.data:
-            text += f"📅 <b>{r['date']}</b>  💰 {fmt(r['total'])} ₸  🧾 {r['checks_count']} чеков\n"
+            cash_end_val = r.get("cash_end")
+            cash_end_str = f"  💵 Остаток: {fmt(cash_end_val)} ₸" if cash_end_val is not None else ""
+            text += f"📅 <b>{r['date']}</b>  💰 {fmt(r['total'])} ₸  🧾 {r['checks_count']} чеков{cash_end_str}\n"
         await message.answer(text, parse_mode="HTML")
     except Exception as e:
         await message.answer(f"❌ {e}")
@@ -653,8 +679,6 @@ async def sal_history(callback: CallbackQuery):
     except Exception as e:
         await callback.message.answer(f"❌ {e}")
     await callback.answer()
-
-
 
 # ── МОЯ ЗАРПЛАТА (для сотрудников) ────────────────────────────────────────────
 @dp.message(F.text == "💰 Моя зарплата")

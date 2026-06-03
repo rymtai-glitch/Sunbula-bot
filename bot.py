@@ -65,6 +65,25 @@ def calc_hours(t1, t2):
         return mins/60, mins
     except: return 0, 0
 
+def calc_hours_capped(t1, t2):
+    """Считает часы с ограничением 07:00-23:00 (для Дияр и Виктория)"""
+    try:
+        a = datetime.strptime(t1, "%H:%M")
+        b = datetime.strptime(t2, "%H:%M")
+        if b < a: b += timedelta(hours=24)
+        cap_start = datetime.strptime("07:00", "%H:%M")
+        cap_end   = datetime.strptime("23:00", "%H:%M")
+        if b.hour < 7 and b > a:
+            cap_end += timedelta(hours=24)
+        a = max(a, cap_start)
+        b = min(b, cap_end)
+        if b <= a: return 0, 0
+        mins = int((b - a).total_seconds() / 60)
+        return mins / 60, mins
+    except: return 0, 0
+
+CAPPED_EMPLOYEES = {"Дияр", "Виктория"}
+
 def is_admin(uid_): return uid_ in ADMIN_IDS
 def get_emp_name(uid_): return STAFF.get(uid_)
 
@@ -277,7 +296,10 @@ async def co_photo(message: Message, state: FSMContext):
     try:
         ci = sb.table("shifts").select("*").eq("employee", emp).eq("date", data["date"]).eq("type", "checkin").order("created_at", desc=True).limit(1).execute()
         ci_time = ci.data[0]["time"] if ci.data else None
-        hrs, mins = calc_hours(ci_time, data["time"]) if ci_time else (0, 0)
+        if emp in CAPPED_EMPLOYEES:
+            hrs, mins = calc_hours_capped(ci_time, data["time"]) if ci_time else (0, 0)
+        else:
+            hrs, mins = calc_hours(ci_time, data["time"]) if ci_time else (0, 0)
         hlabel = f"{mins//60}ч {mins%60}мин"
         salary = 0; slabel = ""
         if cfg["type"] == "hourly":

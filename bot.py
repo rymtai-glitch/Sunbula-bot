@@ -103,7 +103,7 @@ def main_kb_admin():
         [KeyboardButton(text="📦 Накладная"), KeyboardButton(text="📊 Отчет")],
         [KeyboardButton(text="🟢 Приход"),    KeyboardButton(text="🔴 Уход")],
         [KeyboardButton(text="📈 Аналитика"), KeyboardButton(text="👥 Зарплаты")],
-        [KeyboardButton(text="📋 Архив отчетов")],
+        [KeyboardButton(text="📋 Архив отчетов"), KeyboardButton(text="🤖 AI Контент")],
     ], resize_keyboard=True)
 
 def cancel_kb():
@@ -847,6 +847,29 @@ async def my_salary(message: Message):
         await message.answer(text, parse_mode="HTML")
     except Exception as e:
         await message.answer(f"❌ {e}")
+
+# ── AI КОНТЕНТ (по кнопке) ────────────────────────────────────────────────────
+@dp.message(F.text == "🤖 AI Контент")
+async def ai_content(message: Message):
+    if not is_admin(message.from_user.id):
+        return await message.answer("⛔ Нет доступа.")
+    await message.answer("⏳ Генерирую контент, подожди 10-15 секунд...")
+    weather = await get_weather()
+    dt = today()
+    rows = sb.table("daily_reports").select("*").eq("date", dt).execute()
+    if not rows.data:
+        yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
+        rows = sb.table("daily_reports").select("*").eq("date", yesterday).execute()
+    report = rows.data[0] if rows.data else {}
+    stories = await generate_stories(weather, report)
+    sep = "—" * 26
+    text = (
+        "🤖 <b>AI Контент на сегодня</b>\n\n"
+        + "🌤 <b>Погода:</b> " + weather + "\n"
+        + sep + "\n\n"
+        + stories
+    )
+    await message.answer(text, parse_mode="HTML")
 
 # ── Universal cancel handler ───────────────────────────────────────────────────
 @dp.message(F.text == "❌ Отмена")

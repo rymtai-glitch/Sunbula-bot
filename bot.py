@@ -1,5 +1,6 @@
 import os
 import logging
+import httpx
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
@@ -14,6 +15,8 @@ from supabase import create_client, Client
 BOT_TOKEN  = os.getenv("BOT_TOKEN",  "8887485175:AAFR7HoGUrV5_o8JdHD6LKlY3f7XjNn4Ym8")
 SUPA_URL   = os.getenv("SUPABASE_URL", "https://knofisuaqxpqxplktgsw.supabase.co")
 SUPA_KEY   = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtub2Zpc3VhcXhwcXhwbGt0Z3N3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMDYwODgsImV4cCI6MjA5NTc4MjA4OH0.huhDNaF5FN9_YqMzasFM8DssSwPKufRxtJ2SKqb_8ME")
+ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY", "")
+WEATHER_KEY   = os.getenv("WEATHER_KEY", "")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -860,9 +863,144 @@ async def cancel_cb(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(callback.from_user.id) else main_kb_staff())
     await callback.answer()
 
+# ── ПОГОДА ────────────────────────────────────────────────────────────────────
+async def get_weather():
+    if not WEATHER_KEY:
+        return "🌤 Погода недоступна (нет API ключа)"
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/weather?q=Astana,KZ&appid={WEATHER_KEY}&units=metric&lang=ru"
+        async with httpx.AsyncClient() as client:
+            r = await client.get(url, timeout=10)
+            d = r.json()
+        temp     = round(d["main"]["temp"])
+        feels    = round(d["main"]["feels_like"])
+        desc     = d["weather"][0]["description"].capitalize()
+        humidity = d["main"]["humidity"]
+        return f"🌡 {temp}°C (ощущается {feels}°C), {desc}, влажность {humidity}%"
+    except Exception as e:
+        return f"🌤 Погода недоступна ({e})"
+
+# ── AI STORIES ─────────────────────────────────────────────────────────────────
+async def generate_stories(weather: str, report: dict) -> str:
+    if not ANTHROPIC_KEY:
+        return "🤖 AI недоступен (нет API ключа)"
+    try:
+        total    = report.get("total", 0)
+        checks   = report.get("checks_count", 0)
+        avg      = report.get("avg_check", 0)
+        cash_end = report.get("cash_end", 0)
+        weekday  = now_dt().strftime("%A")
+        date_str = today()
+
+        prompt = f"""Ты — контент-директор кофейни Sunbula (Астана, Казахстан).
+Кофейня: уютная, семейная, про осознанное питание, кофе, завтраки, здоровую еду.
+Аудитория: молодые люди 22-40 лет, семьи, осознанные потребители.
+Тональность: тёплая, живая, честная, без пафоса.
+
+Данные за вчера:
+- Выручка: {fmt(total)} ₸
+- Чеков: {checks}, средний чек: {fmt(avg)} ₸
+- День недели сегодня: {weekday}
+- Погода в Астане: {weather}
+- Дата: {date_str}
+
+Создай 5 уникальных сторителлинг-историй для Instagram Stories.
+Каждая история — это серия из 3-4 слайдов с текстом.
+Истории должны быть разными по теме: одна про утро, одна про продукт, одна эмоциональная, одна вовлекающая (вопрос/опрос), одна продающая.
+Учитывай погоду и день недели при создании.
+
+Формат каждой истории:
+История N — [название]
+Слайд 1: [текст]
+Слайд 2: [текст]
+Слайд 3: [текст]
+Слайд 4 (если нужен): [текст/CTA]
+
+Пиши на русском языке. Будь креативным и живым."""
+
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 2000,
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                timeout=30
+            )
+            data = r.json()
+        return data["content"][0]["text"]
+    except Exception as e:
+        return f"🤖 Ошибка генерации: {e}"
+
+# ── УТРЕННЕЕ УВЕДОМЛЕНИЕ ───────────────────────────────────────────────────────
+async def send_morning_report():
+    try:
+        yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
+        rows = sb.table("daily_reports").select("*").eq("date", yesterday).execute()
+        report = rows.data[0] if rows.data else {}
+
+        weather = await get_weather()
+        stories = await generate_stories(weather, report)
+
+        total    = report.get("total", 0)
+        checks   = report.get("checks_count", 0)
+        avg      = report.get("avg_check", 0)
+        cash_end = report.get("cash_end", 0)
+
+        if report:
+            stats = (
+                "📊 <b>Итоги вчера (" + yesterday + "):</b>\n"
+                "💰 Выручка: <b>" + fmt(total) + " ₸</b>\n"
+                "🧾 Чеков: " + str(checks) + "  |  Средний: <b>" + fmt(avg) + " ₸</b>\n"
+                "💵 Остаток наличных: <b>" + fmt(cash_end) + " ₸</b>"
+            )
+        else:
+            stats = "📊 Отчёт за вчера не найден"
+
+        sep = "—" * 26
+        text = (
+            "☀️ <b>Доброе утро, Айторе!</b>\n\n"
+            + stats + "\n\n"
+            + "🌤 <b>Погода в Астане:</b>\n" + weather + "\n\n"
+            + sep + "\n"
+            + "🎬 <b>Контент на сегодня:</b>\n\n"
+            + stories
+        )
+
+        # Отправляем обоим админам
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(admin_id, text, parse_mode="HTML")
+            except Exception as e:
+                logging.error(f"Не удалось отправить утренний отчёт {admin_id}: {e}")
+
+        logging.info("✅ Утренний отчёт отправлен")
+    except Exception as e:
+        logging.error(f"Ошибка утреннего отчёта: {e}")
+
+# ── ПЛАНИРОВЩИК ────────────────────────────────────────────────────────────────
+async def scheduler():
+    """Ждёт 9:00 по Астане и отправляет утренний отчёт"""
+    while True:
+        now = now_dt()
+        target = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        wait_seconds = (target - now).total_seconds()
+        logging.info(f"⏰ Следующий отчёт через {int(wait_seconds//3600)}ч {int((wait_seconds%3600)//60)}мин")
+        await asyncio.sleep(wait_seconds)
+        await send_morning_report()
+
 # ── Run ────────────────────────────────────────────────────────────────────────
 async def main():
     logging.info("✅ Sunbula Bot started!")
+    asyncio.create_task(scheduler())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

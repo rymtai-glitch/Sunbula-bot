@@ -1,5 +1,6 @@
 import os
 import logging
+import httpx
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
@@ -8,14 +9,14 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 import asyncio
-import httpx
 from supabase import create_client, Client
 
 # ── Config ──────────────────────────────────────────────────────────────────
 BOT_TOKEN  = os.getenv("BOT_TOKEN",  "8887485175:AAFR7HoGUrV5_o8JdHD6LKlY3f7XjNn4Ym8")
-ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY", "")
 SUPA_URL   = os.getenv("SUPABASE_URL", "https://knofisuaqxpqxplktgsw.supabase.co")
 SUPA_KEY   = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtub2Zpc3VhcXhwcXhwbGt0Z3N3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMDYwODgsImV4cCI6MjA5NTc4MjA4OH0.huhDNaF5FN9_YqMzasFM8DssSwPKufRxtJ2SKqb_8ME")
+ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY", "")
+WEATHER_KEY   = os.getenv("WEATHER_KEY", "")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -23,9 +24,9 @@ dp  = Dispatcher(storage=MemoryStorage())
 sb: Client = create_client(SUPA_URL, SUPA_KEY)
 
 # ── Access ───────────────────────────────────────────────────────────────────
-ADMIN_ID = 394382908   # @rymtayy
+ADMIN_ID = 394382908    # @rymtayy (главный)
+ADMIN_IDS = {394382908, 7990145871}  # все админы
 
-# Сотрудники: telegram_id -> имя  (заполним когда пришлют /myid)
 STAFF = {
     740516816:  "Дияр",
     805285953:  "Ансаган",
@@ -67,7 +68,28 @@ def calc_hours(t1, t2):
         return mins/60, mins
     except: return 0, 0
 
-def is_admin(uid_): return uid_ == ADMIN_ID
+def calc_hours_capped(t1, t2):
+    """Считает часы с ограничением 07:00-23:00 (для Дияр и Виктория)"""
+    try:
+        a = datetime.strptime(t1, "%H:%M")
+        b = datetime.strptime(t2, "%H:%M")
+        if b < a: b += timedelta(hours=24)
+        # Ограничение: не раньше 07:00 и не позже 23:00
+        cap_start = datetime.strptime("07:00", "%H:%M")
+        cap_end   = datetime.strptime("23:00", "%H:%M")
+        # Если уход перешёл за полночь — сдвигаем cap_end тоже
+        if b > datetime.strptime("23:59", "%H:%M"):
+            cap_end += timedelta(hours=24)
+        a = max(a, cap_start)
+        b = min(b, cap_end)
+        if b <= a: return 0, 0
+        mins = int((b - a).total_seconds() / 60)
+        return mins / 60, mins
+    except: return 0, 0
+
+CAPPED_EMPLOYEES = {"Дияр", "Виктория"}
+
+def is_admin(uid_): return uid_ in ADMIN_IDS
 def get_emp_name(uid_): return STAFF.get(uid_)
 
 # ── Keyboards ─────────────────────────────────────────────────────────────────
@@ -83,7 +105,7 @@ def main_kb_admin():
         [KeyboardButton(text="📦 Накладная"), KeyboardButton(text="📊 Отчет")],
         [KeyboardButton(text="🟢 Приход"),    KeyboardButton(text="🔴 Уход")],
         [KeyboardButton(text="📈 Аналитика"), KeyboardButton(text="👥 Зарплаты")],
-        [KeyboardButton(text="📋 Архив отчетов"), KeyboardButton(text="🤖 AI отчет")],
+        [KeyboardButton(text="📋 Архив отчетов"), KeyboardButton(text="🤖 AI Контент")],
     ], resize_keyboard=True)
 
 def cancel_kb():
@@ -117,7 +139,7 @@ def salary_menu_kb():
 # ── States ────────────────────────────────────────────────────────────────────
 class CI(StatesGroup):   emp=State(); photo=State()
 class CO(StatesGroup):   emp=State(); photo=State()
-class Rep(StatesGroup):  cash=State(); kaspi=State(); glovo=State(); wolt=State(); yandex=State(); ret=State(); chk=State()
+class Rep(StatesGroup):  cash=State(); kaspi=State(); glovo=State(); wolt=State(); yandex=State(); ret=State(); chk=State(); cash_end=State()
 class Inv(StatesGroup):  photo=State(); store=State(); item=State(); qty=State(); price=State()
 class Sal(StatesGroup):  emp=State(); amount=State(); reason=State(); action=State()
 
@@ -169,15 +191,33 @@ async def ci_emp(callback: CallbackQuery, state: FSMContext):
 async def ci_photo(message: Message, state: FSMContext):
     data = await state.get_data()
     try:
-        sb.table("shifts").insert({"id":uid(),"employee":data["employee"],"type":"checkin","time":data["time"],"date":data["date"],"created_at":datetime.utcnow().isoformat()}).execute()
-        await message.answer(f"✅ <b>Приход зафиксирован!</b>\n\n👤 <b>{data['employee']}</b>\n🕐 {data['time']}  📅 {data['date']}", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(), parse_mode="HTML")
+        sb.table("shifts").insert({
+            "id": uid(), "employee": data["employee"], "type": "checkin",
+            "time": data["time"], "date": data["date"],
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
+
+        await message.answer(
+            f"✅ <b>Приход зафиксирован!</b>\n\n👤 <b>{data['employee']}</b>\n🕐 {data['time']}  📅 {data['date']}",
+            reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(),
+            parse_mode="HTML"
+        )
+
+        # 🔔 Уведомление админу
+        if not is_admin(message.from_user.id):
+            await bot.send_message(
+                ADMIN_ID,
+                f"🟢 <b>Приход сотрудника</b>\n\n👤 <b>{data['employee']}</b>\n🕐 {data['time']}  📅 {data['date']}",
+                parse_mode="HTML"
+            )
     except Exception as e:
         await message.answer(f"❌ {e}", reply_markup=main_kb_staff())
     await state.clear()
 
 @dp.message(CI.photo, F.text=="❌ Отмена")
 async def ci_cancel(message: Message, state: FSMContext):
-    await state.clear(); await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
+    await state.clear()
+    await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
 
 # ── УХОД ──────────────────────────────────────────────────────────────────────
 @dp.message(F.text == "🔴 Уход")
@@ -221,13 +261,36 @@ async def shift_chosen(callback: CallbackQuery, state: FSMContext):
     label  = "Полная смена" if full else "Половина смены"
     data   = await state.get_data()
     try:
-        sb.table("shifts").insert({"id":uid(),"employee":emp,"type":"checkout","time":data.get("time",time_s()),"date":data.get("date",today()),"shift_type":label,"salary":salary,"created_at":datetime.utcnow().isoformat()}).execute()
-        sb.table("salary_records").insert({"id":uid(),"employee":emp,"date":data.get("date",today()),"shift_type":label,"hours":None,"salary":salary,"rate_type":"shift","created_at":datetime.utcnow().isoformat()}).execute()
+        sb.table("shifts").insert({
+            "id": uid(), "employee": emp, "type": "checkout",
+            "time": data.get("time", time_s()), "date": data.get("date", today()),
+            "shift_type": label, "salary": salary,
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
+        sb.table("salary_records").insert({
+            "id": uid(), "employee": emp, "date": data.get("date", today()),
+            "shift_type": label, "hours": None, "salary": salary,
+            "rate_type": "shift", "created_at": datetime.utcnow().isoformat()
+        }).execute()
+
         await callback.message.edit_reply_markup()
-        await callback.message.answer(f"✅ <b>Смена зафиксирована!</b>\n\n👤 <b>{emp}</b>\n📋 {label}\n💰 Начислено: <b>{fmt(salary)} ₸</b>", reply_markup=main_kb_admin() if is_admin(callback.from_user.id) else main_kb_staff(), parse_mode="HTML")
+        await callback.message.answer(
+            f"✅ <b>Смена зафиксирована!</b>\n\n👤 <b>{emp}</b>\n📋 {label}\n💰 Начислено: <b>{fmt(salary)} ₸</b>",
+            reply_markup=main_kb_admin() if is_admin(callback.from_user.id) else main_kb_staff(),
+            parse_mode="HTML"
+        )
+
+        # 🔔 Уведомление админу
+        if not is_admin(callback.from_user.id):
+            await bot.send_message(
+                ADMIN_ID,
+                f"🔴 <b>Уход сотрудника</b>\n\n👤 <b>{emp}</b>\n📋 {label}\n🕐 {data.get('time', time_s())}  📅 {data.get('date', today())}\n💰 Начислено: <b>{fmt(salary)} ₸</b>",
+                parse_mode="HTML"
+            )
     except Exception as e:
         await callback.message.answer(f"❌ {e}", reply_markup=main_kb_staff())
-    await state.clear(); await callback.answer()
+    await state.clear()
+    await callback.answer()
 
 @dp.message(CO.photo, F.photo)
 async def co_photo(message: Message, state: FSMContext):
@@ -236,33 +299,63 @@ async def co_photo(message: Message, state: FSMContext):
     cfg  = EMP[emp]
     await message.answer("⏳ Обрабатываю...")
     try:
-        ci = sb.table("shifts").select("*").eq("employee",emp).eq("date",data["date"]).eq("type","checkin").order("created_at",desc=True).limit(1).execute()
+        ci = sb.table("shifts").select("*").eq("employee", emp).eq("date", data["date"]).eq("type", "checkin").order("created_at", desc=True).limit(1).execute()
         ci_time = ci.data[0]["time"] if ci.data else None
-        hrs, mins = calc_hours(ci_time, data["time"]) if ci_time else (0,0)
+        if emp in CAPPED_EMPLOYEES:
+            hrs, mins = calc_hours_capped(ci_time, data["time"]) if ci_time else (0, 0)
+        else:
+            hrs, mins = calc_hours(ci_time, data["time"]) if ci_time else (0, 0)
         hlabel = f"{mins//60}ч {mins%60}мин"
         salary = 0; slabel = ""
-        if cfg["type"]=="hourly":
+        if cfg["type"] == "hourly":
             salary = round(hrs * cfg["rate"])
             slabel = f"\n💰 <b>{fmt(salary)} ₸</b>  ({hrs:.1f}ч × {fmt(cfg['rate'])} ₸/ч)"
-        elif cfg["type"]=="fixed":
-            salary = cfg["amount"]; slabel = f"\n💰 <b>{fmt(salary)} ₸</b>"
-        elif cfg["type"]=="count":
+        elif cfg["type"] == "fixed":
+            salary = cfg["amount"]
+            slabel = f"\n💰 <b>{fmt(salary)} ₸</b>"
+        elif cfg["type"] == "count":
             slabel = "\n📊 Смена засчитана"
-        sb.table("shifts").insert({"id":uid(),"employee":emp,"type":"checkout","time":data["time"],"date":data["date"],"checkin_time":ci_time,"hours_worked":hlabel,"salary":salary,"created_at":datetime.utcnow().isoformat()}).execute()
-        if salary > 0 or cfg["type"]=="count":
-            sb.table("salary_records").insert({"id":uid(),"employee":emp,"date":data["date"],"shift_type":"Смена","hours":round(hrs,2),"salary":salary,"rate_type":cfg["type"],"checkin_time":ci_time,"checkout_time":data["time"],"created_at":datetime.utcnow().isoformat()}).execute()
-        await message.answer(f"✅ <b>Уход зафиксирован!</b>\n\n👤 <b>{emp}</b>\n🟢 {ci_time or '—'} → 🔴 {data['time']}\n🕐 {hlabel}{slabel}", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(), parse_mode="HTML")
+
+        sb.table("shifts").insert({
+            "id": uid(), "employee": emp, "type": "checkout",
+            "time": data["time"], "date": data["date"],
+            "checkin_time": ci_time, "hours_worked": hlabel,
+            "salary": salary, "created_at": datetime.utcnow().isoformat()
+        }).execute()
+
+        if salary > 0 or cfg["type"] == "count":
+            sb.table("salary_records").insert({
+                "id": uid(), "employee": emp, "date": data["date"],
+                "shift_type": "Смена", "hours": round(hrs, 2),
+                "salary": salary, "rate_type": cfg["type"],
+                "checkin_time": ci_time, "checkout_time": data["time"],
+                "created_at": datetime.utcnow().isoformat()
+            }).execute()
+
+        await message.answer(
+            f"✅ <b>Уход зафиксирован!</b>\n\n👤 <b>{emp}</b>\n🟢 {ci_time or '—'} → 🔴 {data['time']}\n🕐 {hlabel}{slabel}",
+            reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(),
+            parse_mode="HTML"
+        )
+
+        # 🔔 Уведомление админу
+        if not is_admin(message.from_user.id):
+            await bot.send_message(
+                ADMIN_ID,
+                f"🔴 <b>Уход сотрудника</b>\n\n👤 <b>{emp}</b>\n🟢 {ci_time or '—'} → 🔴 {data['time']}\n🕐 {hlabel}{slabel}",
+                parse_mode="HTML"
+            )
     except Exception as e:
         await message.answer(f"❌ {e}", reply_markup=main_kb_staff())
     await state.clear()
 
 @dp.message(CO.photo, F.text=="❌ Отмена")
 async def co_cancel(message: Message, state: FSMContext):
-    await state.clear(); await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
+    await state.clear()
+    await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
 
 # ── ОТЧЕТ ─────────────────────────────────────────────────────────────────────
 def parse_num(text):
-    """Parse number from user input, return None if invalid."""
     if not text: return None
     cleaned = text.replace(" ", "").replace(",", ".").replace("₸", "").strip()
     try:
@@ -352,58 +445,78 @@ async def rep_ret(message: Message, state: FSMContext):
     await message.answer("🧾 Введите <b>количество чеков</b>:", parse_mode="HTML")
 
 @dp.message(Rep.chk)
+async def rep_chk(message: Message, state: FSMContext):
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=back_kb(message.from_user.id))
+    try:
+        chk = int(message.text.replace(" ", ""))
+        await state.update_data(chk=chk)
+        await state.set_state(Rep.cash_end)
+        await message.answer("💵 Введите <b>остаток наличных на конец дня</b> (₸):", parse_mode="HTML")
+    except:
+        await message.answer("⚠️ Введите целое число:")
+
+@dp.message(Rep.cash_end)
 async def rep_finish(message: Message, state: FSMContext):
-    if message.text=="❌ Отмена":
-        await state.clear(); return await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=back_kb(message.from_user.id))
+    n = parse_num(message.text)
+    if n is None:
+        return await message.answer("⚠️ Введите число (например: 15000):")
+
     try:
         d = await state.get_data()
-        chk = int(message.text.replace(" ",""))
-        total = d["cash"]+d["kaspi"]+d["glovo"]+d["wolt"]+d["yandex"]-d["ret"]
-        avg = round(total/chk) if chk>0 else 0
+        chk = d["chk"]
+        cash_end = n
+        total = d["cash"] + d["kaspi"] + d["glovo"] + d["wolt"] + d["yandex"] - d["ret"]
+        avg = round(total / chk) if chk > 0 else 0
         dt = today()
+        sender_name = get_emp_name(message.from_user.id) or "Админ"
 
-        # Save transactions
-        for cat,amt in [("Cash",d["cash"]),("Kaspi QR",d["kaspi"]),("Glovo",d["glovo"]),("Wolt",d["wolt"]),("Yandex",d["yandex"])]:
-            if amt>0: sb.table("transactions").insert({"id":uid(),"type":"income","amount":amt,"category":cat,"description":f"Отчет {dt}","date":dt,"created_at":datetime.utcnow().isoformat()}).execute()
+        for cat, amt in [("Cash", d["cash"]), ("Kaspi QR", d["kaspi"]), ("Glovo", d["glovo"]),
+                         ("Wolt", d["wolt"]), ("Yandex", d["yandex"])]:
+            if amt > 0:
+                sb.table("transactions").insert({
+                    "id": uid(), "type": "income", "amount": amt,
+                    "category": cat, "description": f"Отчет {dt}",
+                    "date": dt, "created_at": datetime.utcnow().isoformat()
+                }).execute()
 
-        sb.table("daily_reports").upsert({"id":dt,"date":dt,"cash":d["cash"],"kaspi":d["kaspi"],"glovo":d["glovo"],"wolt":d["wolt"],"yandex":d["yandex"],"returns":d["ret"],"checks_count":chk,"total":total,"avg_check":avg,"created_at":datetime.utcnow().isoformat()}).execute()
+        sb.table("daily_reports").upsert({
+            "id": dt, "date": dt,
+            "cash": d["cash"], "kaspi": d["kaspi"], "glovo": d["glovo"],
+            "wolt": d["wolt"], "yandex": d["yandex"],
+            "returns": d["ret"], "checks_count": chk,
+            "total": total, "avg_check": avg,
+            "cash_end": cash_end,
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
 
-        # Get yesterday for comparison
         yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
         yest = sb.table("daily_reports").select("*").eq("date", yesterday).execute()
         y = yest.data[0] if yest.data else None
 
-        def diff_str(today_val, yest_val):
-            if not y or yest_val == 0: return ""
-            diff = today_val - yest_val
-            pct = round(diff / yest_val * 100)
-            arrow = "📈" if diff >= 0 else "📉"
-            sign = "+" if diff >= 0 else ""
-            return f"  {arrow} {sign}{fmt(diff)} ₸ ({sign}{pct}%)"
-
-        # Month stats
-        ms = dt[:7]+"-01"
-        mo = sb.table("daily_reports").select("total").gte("date",ms).execute()
+        ms = dt[:7] + "-01"
+        mo = sb.table("daily_reports").select("total").gte("date", ms).execute()
         mt = sum(r["total"] for r in mo.data) if mo.data else total
         dc = len(mo.data) or 1
 
-        # Category percentages
         cats = [("💵 Наличные", d["cash"]), ("📲 Kaspi QR", d["kaspi"]),
                 ("🟢 Glovo", d["glovo"]), ("🚀 Wolt", d["wolt"]), ("🚕 Яндекс", d["yandex"])]
-        gross = d["cash"]+d["kaspi"]+d["glovo"]+d["wolt"]+d["yandex"]
-
+        gross = sum(a for _, a in cats)
         cat_lines = ""
         for name, amt in cats:
             if amt > 0:
-                pct = round(amt/gross*100) if gross > 0 else 0
+                pct = round(amt / gross * 100) if gross > 0 else 0
                 cat_lines += f"{name}:  <b>{fmt(amt)} ₸</b>  ({pct}%)\n"
 
-        # Comparison block
         cmp_block = ""
         if y:
             y_total = y.get("total", 0)
             diff = total - y_total
-            pct = round(diff/y_total*100) if y_total else 0
+            pct = round(diff / y_total * 100) if y_total else 0
             sign = "+" if diff >= 0 else ""
             arrow = "📈" if diff >= 0 else "📉"
             cmp_block = (
@@ -413,20 +526,20 @@ async def rep_finish(message: Message, state: FSMContext):
                 f"Сегодня: {fmt(total)} ₸\n"
                 f"{arrow} <b>{sign}{fmt(diff)} ₸  ({sign}{pct}%)</b>\n"
             )
-            # Per category comparison
-            y_cats = [("💵 Наличные","cash"),("📲 Kaspi QR","kaspi"),
-                      ("🟢 Glovo","glovo"),("🚀 Wolt","wolt"),("🚕 Яндекс","yandex")]
-            today_vals = {"cash":d["cash"],"kaspi":d["kaspi"],"glovo":d["glovo"],"wolt":d["wolt"],"yandex":d["yandex"]}
+            y_cats = [("💵 Наличные", "cash"), ("📲 Kaspi QR", "kaspi"),
+                      ("🟢 Glovo", "glovo"), ("🚀 Wolt", "wolt"), ("🚕 Яндекс", "yandex")]
+            today_vals = {"cash": d["cash"], "kaspi": d["kaspi"], "glovo": d["glovo"],
+                          "wolt": d["wolt"], "yandex": d["yandex"]}
             for name, key in y_cats:
-                tv = today_vals[key]; yv = y.get(key,0) or 0
+                tv = today_vals[key]; yv = y.get(key, 0) or 0
                 if tv > 0 or yv > 0:
                     dd = tv - yv
-                    dp = round(dd/yv*100) if yv else 0
+                    dp2 = round(dd / yv * 100) if yv else 0
                     sg = "+" if dd >= 0 else ""
                     ar = "↑" if dd >= 0 else "↓"
-                    cmp_block += f"  {name}: {ar} {sg}{fmt(dd)} ₸ ({sg}{dp}%)\n"
+                    cmp_block += f"  {name}: {ar} {sg}{fmt(dd)} ₸ ({sg}{dp2}%)\n"
 
-        await message.answer(
+        report_text = (
             f"✅ <b>Отчет сохранен!</b>\n\n"
             f"📅 Дата: {dt}  🕐 {time_s()}\n\n"
             f"<b>Выручка по каналам:</b>\n"
@@ -435,12 +548,30 @@ async def rep_finish(message: Message, state: FSMContext):
             f"{'—'*26}\n"
             f"💰 Общая выручка: <b>{fmt(total)} ₸</b>\n"
             f"🧾 Чеков: {chk}  |  📊 Средний чек: <b>{fmt(avg)} ₸</b>\n"
+            f"💵 Остаток наличных: <b>{fmt(cash_end)} ₸</b>\n"
             f"{cmp_block}"
             f"{'—'*26}\n"
-            f"📅 Месяц: {fmt(mt)} ₸  |  Ср/день: {fmt(round(mt/dc))} ₸",
+            f"📅 Месяц: {fmt(mt)} ₸  |  Ср/день: {fmt(round(mt / dc))} ₸"
+        )
+
+        await message.answer(
+            report_text,
             reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(),
             parse_mode="HTML"
         )
+
+        # 🔔 Уведомление админу
+        if not is_admin(message.from_user.id):
+            await bot.send_message(
+                ADMIN_ID,
+                f"📊 <b>Новый отчёт от {sender_name}!</b>\n\n"
+                f"📅 {dt}  🕐 {time_s()}\n"
+                f"💰 Выручка: <b>{fmt(total)} ₸</b>\n"
+                f"🧾 Чеков: {chk}  |  Средний: <b>{fmt(avg)} ₸</b>\n"
+                f"💵 Остаток наличных: <b>{fmt(cash_end)} ₸</b>",
+                parse_mode="HTML"
+            )
+
     except Exception as e:
         await message.answer(f"❌ {e}", reply_markup=main_kb_staff())
     await state.clear()
@@ -458,40 +589,60 @@ async def inv_photo(message: Message, state: FSMContext):
 
 @dp.message(Inv.photo, F.text=="❌ Отмена")
 async def inv_cancel(message: Message, state: FSMContext):
-    await state.clear(); await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
+    await state.clear()
+    await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
 
 @dp.message(Inv.store)
 async def inv_store(message: Message, state: FSMContext):
     if message.text=="❌ Отмена":
-        await state.clear(); return await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
-    await state.update_data(store=message.text); await state.set_state(Inv.item)
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
+    await state.update_data(store=message.text)
+    await state.set_state(Inv.item)
     await message.answer("📦 Введите <b>товар</b>:", parse_mode="HTML")
 
 @dp.message(Inv.item)
 async def inv_item(message: Message, state: FSMContext):
     if message.text=="❌ Отмена":
-        await state.clear(); return await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
-    await state.update_data(item=message.text); await state.set_state(Inv.qty)
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
+    await state.update_data(item=message.text)
+    await state.set_state(Inv.qty)
     await message.answer("🔢 Введите <b>количество</b>:", parse_mode="HTML")
 
 @dp.message(Inv.qty)
 async def inv_qty(message: Message, state: FSMContext):
     if message.text=="❌ Отмена":
-        await state.clear(); return await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
-    await state.update_data(qty=message.text); await state.set_state(Inv.price)
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
+    await state.update_data(qty=message.text)
+    await state.set_state(Inv.price)
     await message.answer("💰 Введите <b>цену</b>:", parse_mode="HTML")
 
 @dp.message(Inv.price)
 async def inv_price(message: Message, state: FSMContext):
     if message.text=="❌ Отмена":
-        await state.clear(); return await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff())
     try:
         d = await state.get_data()
         price = float(message.text.replace(" ","").replace(",","."))
         dt = today()
-        sb.table("invoices").insert({"id":uid(),"date":dt,"store":d["store"],"item":d["item"],"quantity":d["qty"],"price":price,"created_at":datetime.utcnow().isoformat()}).execute()
-        sb.table("transactions").insert({"id":uid(),"type":"expense","amount":price,"category":"Магазин","description":f"{d['store']} — {d['item']} x{d['qty']}","date":dt,"created_at":datetime.utcnow().isoformat()}).execute()
-        await message.answer(f"✅ <b>Накладная сохранена!</b>\n\n📅 {now_s()}\n🏪 {d['store']}\n📦 {d['item']}  x{d['qty']}\n💰 {fmt(price)} ₸", reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(), parse_mode="HTML")
+        sb.table("invoices").insert({
+            "id": uid(), "date": dt, "store": d["store"], "item": d["item"],
+            "quantity": d["qty"], "price": price,
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
+        sb.table("transactions").insert({
+            "id": uid(), "type": "expense", "amount": price, "category": "Магазин",
+            "description": f"{d['store']} — {d['item']} x{d['qty']}",
+            "date": dt, "created_at": datetime.utcnow().isoformat()
+        }).execute()
+        await message.answer(
+            f"✅ <b>Накладная сохранена!</b>\n\n📅 {now_s()}\n🏪 {d['store']}\n📦 {d['item']}  x{d['qty']}\n💰 {fmt(price)} ₸",
+            reply_markup=main_kb_admin() if is_admin(message.from_user.id) else main_kb_staff(),
+            parse_mode="HTML"
+        )
     except Exception as e:
         await message.answer(f"❌ {e}", reply_markup=main_kb_staff())
     await state.clear()
@@ -503,8 +654,8 @@ async def analytics(message: Message):
         return await message.answer("⛔ Нет доступа.")
     try:
         dt = today(); ms = dt[:7]+"-01"
-        td = sb.table("daily_reports").select("*").eq("date",dt).execute()
-        mo = sb.table("daily_reports").select("*").gte("date",ms).execute()
+        td = sb.table("daily_reports").select("*").eq("date", dt).execute()
+        mo = sb.table("daily_reports").select("*").gte("date", ms).execute()
         t_total = td.data[0]["total"] if td.data else 0
         t_chk   = td.data[0]["checks_count"] if td.data else 0
         t_avg   = td.data[0]["avg_check"] if td.data else 0
@@ -518,7 +669,8 @@ async def analytics(message: Message):
             f"<b>Месяц к сегодня:</b>\n"
             f"💰 Итого: <b>{fmt(m_total)} ₸</b>\n"
             f"📅 Ср/день: {fmt(round(m_total/m_days))} ₸  ({m_days} дн.)",
-            parse_mode="HTML")
+            parse_mode="HTML"
+        )
     except Exception as e:
         await message.answer(f"❌ {e}")
 
@@ -533,7 +685,9 @@ async def archive(message: Message):
             return await message.answer("Отчетов пока нет.")
         text = "📋 <b>Последние 10 отчетов:</b>\n\n"
         for r in rows.data:
-            text += f"📅 <b>{r['date']}</b>  💰 {fmt(r['total'])} ₸  🧾 {r['checks_count']} чеков\n"
+            cash_end_val = r.get("cash_end")
+            cash_end_str = f"  💵 Остаток: {fmt(cash_end_val)} ₸" if cash_end_val is not None else ""
+            text += f"📅 <b>{r['date']}</b>  💰 {fmt(r['total'])} ₸  🧾 {r['checks_count']} чеков{cash_end_str}\n"
         await message.answer(text, parse_mode="HTML")
     except Exception as e:
         await message.answer(f"❌ {e}")
@@ -551,16 +705,16 @@ async def sal_debt(callback: CallbackQuery):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
     try:
         ms = today()[:7]+"-01"
-        rows = sb.table("salary_records").select("*").gte("date",ms).execute()
+        rows = sb.table("salary_records").select("*").gte("date", ms).execute()
         debts = {}
         for r in (rows.data or []):
             emp = r["employee"]
-            if emp not in debts: debts[emp] = {"earned":0,"paid":0,"fines":0,"bonuses":0}
-            rt = r.get("rate_type","")
-            if rt in ("shift","hourly","fixed","count"): debts[emp]["earned"] += r.get("salary",0) or 0
-            elif rt=="payment": debts[emp]["paid"] += r.get("salary",0) or 0
-            elif rt=="fine": debts[emp]["fines"] += r.get("salary",0) or 0
-            elif rt=="bonus": debts[emp]["bonuses"] += r.get("salary",0) or 0
+            if emp not in debts: debts[emp] = {"earned": 0, "paid": 0, "fines": 0, "bonuses": 0}
+            rt = r.get("rate_type", "")
+            if rt in ("shift","hourly","fixed","count"): debts[emp]["earned"] += r.get("salary", 0) or 0
+            elif rt == "payment": debts[emp]["paid"]    += r.get("salary", 0) or 0
+            elif rt == "fine":    debts[emp]["fines"]   += r.get("salary", 0) or 0
+            elif rt == "bonus":   debts[emp]["bonuses"] += r.get("salary", 0) or 0
         if not debts:
             await callback.message.answer("За этот месяц данных нет.")
             await callback.answer(); return
@@ -584,17 +738,17 @@ async def sal_debt(callback: CallbackQuery):
 async def sal_action(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
-    action_map = {"sal:fine":"fine","sal:bonus":"bonus","sal:advance":"advance"}
+    action_map = {"sal:fine": "fine", "sal:bonus": "bonus", "sal:advance": "advance"}
     action = action_map[callback.data]
-    labels = {"fine":"⚡ Штраф","bonus":"🎁 Премия","advance":"💸 Аванс"}
+    labels = {"fine": "⚡ Штраф", "bonus": "🎁 Премия", "advance": "💸 Аванс"}
     await state.update_data(sal_action=action)
     await state.set_state(Sal.emp)
-    await callback.message.answer(f"{labels[action]} — выберите сотрудника:", reply_markup=emp_inline(f"sal_emp"))
+    await callback.message.answer(f"{labels[action]} — выберите сотрудника:", reply_markup=emp_inline("sal_emp"))
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("sal_emp:"))
 async def sal_emp_chosen(callback: CallbackQuery, state: FSMContext):
-    emp = callback.data.split(":",1)[1]
+    emp = callback.data.split(":", 1)[1]
     await state.update_data(sal_emp=emp)
     await state.set_state(Sal.amount)
     await callback.message.edit_reply_markup()
@@ -603,10 +757,11 @@ async def sal_emp_chosen(callback: CallbackQuery, state: FSMContext):
 
 @dp.message(Sal.amount)
 async def sal_amount(message: Message, state: FSMContext):
-    if message.text=="❌ Отмена":
-        await state.clear(); return await message.answer("Отменено.", reply_markup=main_kb_admin())
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=main_kb_admin())
     try:
-        amount = float(message.text.replace(" ","").replace(",","."))
+        amount = float(message.text.replace(" ", "").replace(",", "."))
         await state.update_data(sal_amount=amount)
         await state.set_state(Sal.reason)
         await message.answer("📝 Введите причину (или напишите «-» если без причины):")
@@ -615,14 +770,15 @@ async def sal_amount(message: Message, state: FSMContext):
 
 @dp.message(Sal.reason)
 async def sal_reason(message: Message, state: FSMContext):
-    if message.text=="❌ Отмена":
-        await state.clear(); return await message.answer("Отменено.", reply_markup=main_kb_admin())
+    if message.text == "❌ Отмена":
+        await state.clear()
+        return await message.answer("Отменено.", reply_markup=main_kb_admin())
     d = await state.get_data()
-    action  = d["sal_action"]
-    emp     = d["sal_emp"]
-    amount  = d["sal_amount"]
-    reason  = message.text if message.text != "-" else ""
-    labels  = {"fine":"Штраф ⚡","bonus":"Премия 🎁","advance":"Аванс 💸"}
+    action = d["sal_action"]
+    emp    = d["sal_emp"]
+    amount = d["sal_amount"]
+    reason = message.text if message.text != "-" else ""
+    labels = {"fine": "Штраф ⚡", "bonus": "Премия 🎁", "advance": "Аванс 💸"}
     try:
         sb.table("salary_records").insert({
             "id": uid(), "employee": emp, "date": today(),
@@ -635,7 +791,8 @@ async def sal_reason(message: Message, state: FSMContext):
             f"✅ <b>{labels[action]} сохранён!</b>\n\n"
             f"👤 {emp}\n💰 {fmt(amount)} ₸"
             + (f"\n📝 {reason}" if reason else ""),
-            reply_markup=main_kb_admin(), parse_mode="HTML")
+            reply_markup=main_kb_admin(), parse_mode="HTML"
+        )
     except Exception as e:
         await message.answer(f"❌ {e}", reply_markup=main_kb_admin())
     await state.clear()
@@ -645,19 +802,17 @@ async def sal_history(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
     try:
-        rows = sb.table("salary_records").select("*").order("created_at",desc=True).limit(20).execute()
+        rows = sb.table("salary_records").select("*").order("created_at", desc=True).limit(20).execute()
         if not rows.data:
             await callback.message.answer("История пуста.")
             await callback.answer(); return
         text = "📜 <b>История выплат (последние 20):</b>\n\n"
         for r in rows.data:
-            text += f"📅 {r['date']}  👤 {r['employee']}  {r['shift_type']}  💰 {fmt(r.get('salary',0))} ₸\n"
+            text += f"📅 {r['date']}  👤 {r['employee']}  {r['shift_type']}  💰 {fmt(r.get('salary', 0))} ₸\n"
         await callback.message.answer(text, parse_mode="HTML")
     except Exception as e:
         await callback.message.answer(f"❌ {e}")
     await callback.answer()
-
-
 
 # ── МОЯ ЗАРПЛАТА (для сотрудников) ────────────────────────────────────────────
 @dp.message(F.text == "💰 Моя зарплата")
@@ -671,15 +826,15 @@ async def my_salary(message: Message):
         rows = sb.table("salary_records").select("*").eq("employee", emp).gte("date", ms).execute()
         earned = 0; paid = 0; fines = 0; bonuses = 0; shifts = 0
         for r in (rows.data or []):
-            rt = r.get("rate_type","")
+            rt = r.get("rate_type", "")
             if rt in ("shift","hourly","fixed"):
-                earned += r.get("salary",0) or 0
+                earned += r.get("salary", 0) or 0
                 shifts += 1
             elif rt == "count":
                 shifts += 1
-            elif rt == "payment": paid    += r.get("salary",0) or 0
-            elif rt == "fine":    fines   += r.get("salary",0) or 0
-            elif rt == "bonus":   bonuses += r.get("salary",0) or 0
+            elif rt == "payment": paid    += r.get("salary", 0) or 0
+            elif rt == "fine":    fines   += r.get("salary", 0) or 0
+            elif rt == "bonus":   bonuses += r.get("salary", 0) or 0
         debt = earned + bonuses - fines - paid
         text = (
             f"💰 <b>Моя зарплата — {today()[:7]}</b>\n\n"
@@ -695,159 +850,28 @@ async def my_salary(message: Message):
     except Exception as e:
         await message.answer(f"❌ {e}")
 
-
-# ── AI ОТЧЕТ ───────────────────────────────────────────────────────────────────
-async def generate_ai_report():
-    """Generate operational director report from financial data."""
-    if not ANTHROPIC_KEY:
-        return "⚠️ AI ключ не настроен. Добавьте ANTHROPIC_KEY в Railway → Variables."
-    try:
-        dt = today()
-        yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
-        ms = dt[:7] + "-01"
-
-        # Daily reports for month
-        reports = sb.table("daily_reports").select("*").gte("date", ms).order("date", desc=True).execute()
-        today_r = next((r for r in (reports.data or []) if r["date"] == dt), None)
-        yest_r  = next((r for r in (reports.data or []) if r["date"] == yesterday), None)
-
-        # Expenses for month
-        exps = sb.table("transactions").select("*").eq("type","expense").gte("date", ms).execute()
-        exp_by_cat = {}
-        for e in (exps.data or []):
-            c = e.get("category","Other")
-            exp_by_cat[c] = exp_by_cat.get(c,0) + float(e.get("amount",0))
-
-        # Salary
-        sal = sb.table("salary_records").select("*").gte("date", ms).execute()
-        sal_by_emp = {}
-        for r in (sal.data or []):
-            e = r["employee"]
-            if e not in sal_by_emp: sal_by_emp[e] = {"earned":0,"paid":0,"fines":0,"bonuses":0}
-            rt = r.get("rate_type","")
-            s = float(r.get("salary",0) or 0)
-            if rt in ("shift","hourly","fixed"): sal_by_emp[e]["earned"] += s
-            elif rt == "payment": sal_by_emp[e]["paid"] += s
-            elif rt == "fine":    sal_by_emp[e]["fines"] += s
-            elif rt == "bonus":   sal_by_emp[e]["bonuses"] += s
-
-        sal_debt_total = sum(d["earned"]+d["bonuses"]-d["fines"]-d["paid"] for d in sal_by_emp.values())
-
-        # Build context
-        month_total = sum(r.get("total",0) for r in (reports.data or []))
-        month_days = len(reports.data or []) or 1
-        avg_daily = month_total / month_days
-        month_exp = sum(exp_by_cat.values())
-
-        ctx = f"""
-ДАННЫЕ КОФЕЙНИ SUNBULA на {dt}:
-
-Сегодня ({dt}):
-- Выручка: {fmt(today_r['total']) if today_r else 'нет данных'} ₸
-- Чеков: {today_r.get('checks_count',0) if today_r else 0}
-- Средний чек: {fmt(today_r.get('avg_check',0)) if today_r else 0} ₸
-- Cash: {fmt(today_r.get('cash',0)) if today_r else 0} ₸
-- Kaspi QR: {fmt(today_r.get('kaspi',0)) if today_r else 0} ₸
-- Glovo: {fmt(today_r.get('glovo',0)) if today_r else 0} ₸
-- Wolt: {fmt(today_r.get('wolt',0)) if today_r else 0} ₸
-- Yandex: {fmt(today_r.get('yandex',0)) if today_r else 0} ₸
-- Возвраты: {fmt(today_r.get('returns',0)) if today_r else 0} ₸
-
-Вчера ({yesterday}):
-- Выручка: {fmt(yest_r['total']) if yest_r else 'нет данных'} ₸
-- Чеков: {yest_r.get('checks_count',0) if yest_r else 0}
-- Средний чек: {fmt(yest_r.get('avg_check',0)) if yest_r else 0} ₸
-
-Месяц к сегодня:
-- Выручка: {fmt(month_total)} ₸ за {month_days} дней
-- Средн. дневная выручка: {fmt(round(avg_daily))} ₸
-- Расходы всего: {fmt(month_exp)} ₸
-- Прибыль: {fmt(month_total - month_exp)} ₸
-
-Расходы по статьям (топ-10):
-""" + "\n".join([f"- {c}: {fmt(v)} ₸" for c,v in sorted(exp_by_cat.items(), key=lambda x:-x[1])[:10]]) + f"""
-
-Зарплаты:
-- Долг по ЗП всего: {fmt(sal_debt_total)} ₸
-""" + "\n".join([f"- {e}: к выплате {fmt(d['earned']+d['bonuses']-d['fines']-d['paid'])} ₸" for e,d in sal_by_emp.items()])
-
-        prompt = f"""Ты — операционный директор кофейни Sunbula. Докладываешь владельцу о делах. Говори по-деловому, кратко, конкретно, как живой человек который реально занимается операционкой. Без воды и общих фраз. Без HTML-тегов, без markdown — только plain текст с эмодзи.
-
-Структура отчета:
-1. Краткая сводка (1-2 предложения)
-2. Что хорошо (2-3 пункта)
-3. На что обратить внимание (2-3 пункта, конкретно — где проблема и что делать)
-4. Рекомендации на сегодня (1-2 конкретных действия)
-
-Длина: 250-400 слов максимум.
-
-ДАННЫЕ:
-{ctx}"""
-
-        async with httpx.AsyncClient(timeout=60) as client:
-            r = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": ANTHROPIC_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json"
-                },
-                json={
-                    "model": "claude-sonnet-4-5",
-                    "max_tokens": 1500,
-                    "messages": [{"role":"user","content":prompt}]
-                }
-            )
-            if r.status_code != 200:
-                return f"⚠️ Ошибка AI ({r.status_code}): {r.text[:200]}"
-            data = r.json()
-            text = data["content"][0]["text"]
-
-        # Save report
-        sb.table("ai_reports").insert({
-            "id": uid(), "date": dt,
-            "report_text": text,
-            "report_type": "manual",
-            "created_at": datetime.utcnow().isoformat()
-        }).execute()
-
-        return text
-    except Exception as e:
-        return f"⚠️ Ошибка: {e}"
-
-
-@dp.message(F.text == "🤖 AI отчет")
-async def ai_report_handler(message: Message):
+# ── AI КОНТЕНТ (по кнопке) ────────────────────────────────────────────────────
+@dp.message(F.text == "🤖 AI Контент")
+async def ai_content(message: Message):
     if not is_admin(message.from_user.id):
         return await message.answer("⛔ Нет доступа.")
-    await message.answer("⏳ Анализирую данные...")
-    report = await generate_ai_report()
-    header = f"🤖 <b>Отчет операционного директора</b>\n📅 {now_s()}\n{'—'*26}\n\n"
-    await message.answer(header + report, reply_markup=main_kb_admin(), parse_mode="HTML")
-
-
-async def daily_ai_scheduler():
-    """Send AI report to admin every day at 9:00 Kazakhstan time."""
-    while True:
-        try:
-            cur = now_dt()
-            # Next 9:00
-            target = cur.replace(hour=9, minute=0, second=0, microsecond=0)
-            if cur >= target:
-                target = target + timedelta(days=1)
-            wait_seconds = (target - cur).total_seconds()
-            logging.info(f"Next AI report in {wait_seconds/3600:.1f}h")
-            await asyncio.sleep(wait_seconds)
-
-            report = await generate_ai_report()
-            header = f"☀️ <b>Доброе утро! Утренний отчет директора</b>\n📅 {now_s()}\n{'—'*26}\n\n"
-            try:
-                await bot.send_message(ADMIN_ID, header + report, parse_mode="HTML")
-            except Exception as e:
-                logging.error(f"Failed to send daily report: {e}")
-        except Exception as e:
-            logging.error(f"Scheduler error: {e}")
-            await asyncio.sleep(60)
+    await message.answer("⏳ Генерирую контент, подожди 10-15 секунд...")
+    weather = await get_weather()
+    dt = today()
+    rows = sb.table("daily_reports").select("*").eq("date", dt).execute()
+    if not rows.data:
+        yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
+        rows = sb.table("daily_reports").select("*").eq("date", yesterday).execute()
+    report = rows.data[0] if rows.data else {}
+    stories = await generate_stories(weather, report)
+    sep = "—" * 26
+    text = (
+        "🤖 <b>AI Контент на сегодня</b>\n\n"
+        + "🌤 <b>Погода:</b> " + weather + "\n"
+        + sep + "\n\n"
+        + stories
+    )
+    await message.answer(text, parse_mode="HTML")
 
 # ── Universal cancel handler ───────────────────────────────────────────────────
 @dp.message(F.text == "❌ Отмена")
@@ -864,10 +888,144 @@ async def cancel_cb(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("Отменено.", reply_markup=main_kb_admin() if is_admin(callback.from_user.id) else main_kb_staff())
     await callback.answer()
 
+# ── ПОГОДА ────────────────────────────────────────────────────────────────────
+async def get_weather():
+    if not WEATHER_KEY:
+        return "🌤 Погода недоступна (нет API ключа)"
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/weather?q=Astana,KZ&appid={WEATHER_KEY}&units=metric&lang=ru"
+        async with httpx.AsyncClient() as client:
+            r = await client.get(url, timeout=10)
+            d = r.json()
+        temp     = round(d["main"]["temp"])
+        feels    = round(d["main"]["feels_like"])
+        desc     = d["weather"][0]["description"].capitalize()
+        humidity = d["main"]["humidity"]
+        return f"🌡 {temp}°C (ощущается {feels}°C), {desc}, влажность {humidity}%"
+    except Exception as e:
+        return f"🌤 Погода недоступна ({e})"
+
+# ── AI STORIES ─────────────────────────────────────────────────────────────────
+async def generate_stories(weather: str, report: dict) -> str:
+    if not ANTHROPIC_KEY:
+        return "🤖 AI недоступен (нет API ключа)"
+    try:
+        total    = report.get("total", 0)
+        checks   = report.get("checks_count", 0)
+        avg      = report.get("avg_check", 0)
+        cash_end = report.get("cash_end", 0)
+        weekday  = now_dt().strftime("%A")
+        date_str = today()
+
+        prompt = f"""Ты — контент-директор кофейни Sunbula (Астана, Казахстан).
+Кофейня: уютная, семейная, про осознанное питание, кофе, завтраки, здоровую еду.
+Аудитория: молодые люди 22-40 лет, семьи, осознанные потребители.
+Тональность: тёплая, живая, честная, без пафоса.
+
+Данные за вчера:
+- Выручка: {fmt(total)} ₸
+- Чеков: {checks}, средний чек: {fmt(avg)} ₸
+- День недели сегодня: {weekday}
+- Погода в Астане: {weather}
+- Дата: {date_str}
+
+Создай 5 уникальных сторителлинг-историй для Instagram Stories.
+Каждая история — это серия из 3-4 слайдов с текстом.
+Истории должны быть разными по теме: одна про утро, одна про продукт, одна эмоциональная, одна вовлекающая (вопрос/опрос), одна продающая.
+Учитывай погоду и день недели при создании.
+
+Формат каждой истории:
+История N — [название]
+Слайд 1: [текст]
+Слайд 2: [текст]
+Слайд 3: [текст]
+Слайд 4 (если нужен): [текст/CTA]
+
+Пиши на русском языке. Будь креативным и живым."""
+
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": ANTHROPIC_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": "claude-haiku-4-5-20251001",
+                    "max_tokens": 2000,
+                    "messages": [{"role": "user", "content": prompt}]
+                },
+                timeout=30
+            )
+            data = r.json()
+        return data["content"][0]["text"]
+    except Exception as e:
+        return f"🤖 Ошибка генерации: {e}"
+
+# ── УТРЕННЕЕ УВЕДОМЛЕНИЕ ───────────────────────────────────────────────────────
+async def send_morning_report():
+    try:
+        yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
+        rows = sb.table("daily_reports").select("*").eq("date", yesterday).execute()
+        report = rows.data[0] if rows.data else {}
+
+        weather = await get_weather()
+        stories = await generate_stories(weather, report)
+
+        total    = report.get("total", 0)
+        checks   = report.get("checks_count", 0)
+        avg      = report.get("avg_check", 0)
+        cash_end = report.get("cash_end", 0)
+
+        if report:
+            stats = (
+                "📊 <b>Итоги вчера (" + yesterday + "):</b>\n"
+                "💰 Выручка: <b>" + fmt(total) + " ₸</b>\n"
+                "🧾 Чеков: " + str(checks) + "  |  Средний: <b>" + fmt(avg) + " ₸</b>\n"
+                "💵 Остаток наличных: <b>" + fmt(cash_end) + " ₸</b>"
+            )
+        else:
+            stats = "📊 Отчёт за вчера не найден"
+
+        sep = "—" * 26
+        text = (
+            "☀️ <b>Доброе утро, Айторе!</b>\n\n"
+            + stats + "\n\n"
+            + "🌤 <b>Погода в Астане:</b>\n" + weather + "\n\n"
+            + sep + "\n"
+            + "🎬 <b>Контент на сегодня:</b>\n\n"
+            + stories
+        )
+
+        # Отправляем обоим админам
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(admin_id, text, parse_mode="HTML")
+            except Exception as e:
+                logging.error(f"Не удалось отправить утренний отчёт {admin_id}: {e}")
+
+        logging.info("✅ Утренний отчёт отправлен")
+    except Exception as e:
+        logging.error(f"Ошибка утреннего отчёта: {e}")
+
+# ── ПЛАНИРОВЩИК ────────────────────────────────────────────────────────────────
+async def scheduler():
+    """Ждёт 9:00 по Астане и отправляет утренний отчёт"""
+    while True:
+        now = now_dt()
+        target = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target += timedelta(days=1)
+        wait_seconds = (target - now).total_seconds()
+        logging.info(f"⏰ Следующий отчёт через {int(wait_seconds//3600)}ч {int((wait_seconds%3600)//60)}мин")
+        await asyncio.sleep(wait_seconds)
+        await send_morning_report()
+
 # ── Run ────────────────────────────────────────────────────────────────────────
 async def main():
     logging.info("✅ Sunbula Bot started!")
-    asyncio.create_task(daily_ai_scheduler())
+    asyncio.create_task(scheduler())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

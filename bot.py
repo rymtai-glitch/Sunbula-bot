@@ -299,8 +299,9 @@ async def co_photo(message: Message, state: FSMContext):
     cfg  = EMP[emp]
     await message.answer("⏳ Обрабатываю...")
     try:
-        ci = sb.table("shifts").select("*").eq("employee", emp).eq("date", data["date"]).eq("type", "checkin").order("created_at", desc=True).limit(1).execute()
+        ci = sb.table("shifts").select("*").eq("employee", emp).eq("type", "checkin").order("created_at", desc=True).limit(1).execute()
         ci_time = ci.data[0]["time"] if ci.data else None
+        ci_date = ci.data[0]["date"] if ci.data else data["date"]
         if emp in CAPPED_EMPLOYEES:
             hrs, mins = calc_hours_capped(ci_time, data["time"]) if ci_time else (0, 0)
         else:
@@ -318,14 +319,14 @@ async def co_photo(message: Message, state: FSMContext):
 
         sb.table("shifts").insert({
             "id": uid(), "employee": emp, "type": "checkout",
-            "time": data["time"], "date": data["date"],
+            "time": data["time"], "date": ci_date,
             "checkin_time": ci_time, "hours_worked": hlabel,
             "salary": salary, "created_at": datetime.utcnow().isoformat()
         }).execute()
 
         if salary > 0 or cfg["type"] == "count":
             sb.table("salary_records").insert({
-                "id": uid(), "employee": emp, "date": data["date"],
+                "id": uid(), "employee": emp, "date": ci_date,
                 "shift_type": "Смена", "hours": round(hrs, 2),
                 "salary": salary, "rate_type": cfg["type"],
                 "checkin_time": ci_time, "checkout_time": data["time"],

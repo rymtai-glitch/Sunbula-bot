@@ -10,13 +10,19 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 import asyncio
 from supabase import create_client, Client
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ── Config ──────────────────────────────────────────────────────────────────
-BOT_TOKEN  = os.getenv("BOT_TOKEN",  "8887485175:AAFR7HoGUrV5_o8JdHD6LKlY3f7XjNn4Ym8")
-SUPA_URL   = os.getenv("SUPABASE_URL", "https://knofisuaqxpqxplktgsw.supabase.co")
-SUPA_KEY   = os.getenv("SUPABASE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtub2Zpc3VhcXhwcXhwbGt0Z3N3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAyMDYwODgsImV4cCI6MjA5NTc4MjA4OH0.huhDNaF5FN9_YqMzasFM8DssSwPKufRxtJ2SKqb_8ME")
+BOT_TOKEN     = os.getenv("BOT_TOKEN")
+SUPA_URL      = os.getenv("SUPABASE_URL")
+SUPA_KEY      = os.getenv("SUPABASE_KEY")
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_KEY", "")
 WEATHER_KEY   = os.getenv("WEATHER_KEY", "")
+
+if not BOT_TOKEN or not SUPA_URL or not SUPA_KEY:
+    raise RuntimeError("Не заданы переменные окружения: BOT_TOKEN, SUPABASE_URL, SUPABASE_KEY. Создайте файл .env")
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)

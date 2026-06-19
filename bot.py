@@ -24,13 +24,10 @@ WEATHER_KEY   = os.getenv("WEATHER_KEY", "")
 if not BOT_TOKEN or not SUPA_URL or not SUPA_KEY:
     raise RuntimeError("Не заданы переменные окружения: BOT_TOKEN, SUPABASE_URL, SUPABASE_KEY. Создайте файл .env")
 
-SUPA_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPA_KEY)
-
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 sb: Client = create_client(SUPA_URL, SUPA_KEY)
-sb_admin: Client = create_client(SUPA_URL, SUPA_SERVICE_KEY)
 
 # ── Access ───────────────────────────────────────────────────────────────────
 ADMIN_ID = 394382908    # @rymtayy (главный)
@@ -969,11 +966,11 @@ async def sl_toggle(callback: CallbackQuery):
     try:
         stopped = sl_get_stopped()
         if item_id in stopped:
-            sb_admin.table("menu_stop_list").delete().eq("menu_id", item_id).execute()
+            sb.table("menu_stop_list").delete().eq("menu_id", item_id).execute()
             stopped.discard(item_id)
             action_text = f"✅ <b>{item_name}</b> — убрано из стоп-листа"
         else:
-            sb_admin.table("menu_stop_list").insert({"menu_id": item_id}).execute()
+            sb.table("menu_stop_list").insert({"menu_id": item_id}).execute()
             stopped.add(item_id)
             action_text = f"❌ <b>{item_name}</b> — добавлено в стоп-лист"
 

@@ -904,8 +904,13 @@ def sl_get_stopped() -> set:
     rows = sb.table("menu_stop_list").select("menu_id").execute()
     return {int(r["menu_id"]) for r in (rows.data or [])}
 
-def sl_cats_kb() -> InlineKeyboardMarkup:
+def sl_cats_kb(stopped: set = None) -> InlineKeyboardMarkup:
     rows = []
+    if stopped:
+        rows.append([InlineKeyboardButton(
+            text=f"📋 В стопе сейчас: {len(stopped)} позиций",
+            callback_data="sl_stopped"
+        )])
     for i in range(0, len(MENU_CATS), 2):
         row = [InlineKeyboardButton(text=MENU_CATS[i][1], callback_data=f"sl_c:{MENU_CATS[i][0]}")]
         if i + 1 < len(MENU_CATS):
@@ -923,6 +928,18 @@ def sl_items_kb(cat_id: str, stopped: set) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton(text="← Назад к категориям", callback_data="sl_back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
+def sl_stopped_kb(stopped: set) -> InlineKeyboardMarkup:
+    rows = []
+    for cat_id, cat_name, items in MENU_CATS:
+        for item_id, item_name in items:
+            if item_id in stopped:
+                rows.append([InlineKeyboardButton(
+                    text=f"❌ {item_name}  →  в наличии",
+                    callback_data=f"sl_u:{item_id}"
+                )])
+    rows.append([InlineKeyboardButton(text="← Назад к категориям", callback_data="sl_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
 @dp.message(F.text == "🛑 Стоп лист")
 async def sl_start(message: Message):
     if not is_admin(message.from_user.id) and get_emp_name(message.from_user.id) is None:
@@ -930,10 +947,10 @@ async def sl_start(message: Message):
     try:
         stopped = sl_get_stopped()
         count = len(stopped)
-        await message.answer(
-            f"🛑 <b>Стоп лист</b>\n\nСейчас в стопе: <b>{count}</b> позиций\n\nВыберите категорию:",
-            reply_markup=sl_cats_kb(), parse_mode="HTML"
-        )
+        text = f"🛑 <b>Стоп лист</b>\n\nВыберите категорию чтобы изменить статус:"
+        if count:
+            text = f"🛑 <b>Стоп лист</b>\n\n❌ В стопе: <b>{count}</b> позиций\n\nНажмите «В стопе сейчас» чтобы быстро убрать, или выберите категорию:"
+        await message.answer(text, reply_markup=sl_cats_kb(stopped), parse_mode="HTML")
     except Exception as e:
         await message.answer(f"❌ {e}")
 
@@ -1004,10 +1021,65 @@ async def sl_back(callback: CallbackQuery):
     try:
         stopped = sl_get_stopped()
         count = len(stopped)
+        text = f"🛑 <b>Стоп лист</b>\n\nВыберите категорию чтобы изменить статус:"
+        if count:
+            text = f"🛑 <b>Стоп лист</b>\n\n❌ В стопе: <b>{count}</b> позиций\n\nНажмите «В стопе сейчас» чтобы быстро убрать, или выберите категорию:"
+        await callback.message.edit_text(text, reply_markup=sl_cats_kb(stopped), parse_mode="HTML")
+    except Exception as e:
+        await callback.message.answer(f"❌ {e}")
+    await callback.answer()
+
+@dp.callback_query(F.data == "sl_stopped")
+async def sl_stopped_view(callback: CallbackQuery):
+    try:
+        stopped = sl_get_stopped()
+        if not stopped:
+            await callback.answer("✅ Стоп-лист пуст!", show_alert=True)
+            return
+        lines = []
+        for cat_id, cat_name, items in MENU_CATS:
+            cat_stopped = [name for iid, name in items if iid in stopped]
+            if cat_stopped:
+                lines.append(f"<b>{cat_name}</b>")
+                lines.extend(f"  ❌ {n}" for n in cat_stopped)
         await callback.message.edit_text(
-            f"🛑 <b>Стоп лист</b>\n\nСейчас в стопе: <b>{count}</b> позиций\n\nВыберите категорию:",
-            reply_markup=sl_cats_kb(), parse_mode="HTML"
+            "🛑 <b>Сейчас в стопе:</b>\n\n" + "\n".join(lines) + "\n\n👆 Нажмите на блюдо чтобы убрать из стопа:",
+            reply_markup=sl_stopped_kb(stopped), parse_mode="HTML"
         )
+    except Exception as e:
+        await callback.message.answer(f"❌ {e}")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("sl_u:"))
+async def sl_unstop(callback: CallbackQuery):
+    item_id = int(callback.data[5:])
+    item_name = next(
+        (n for _, _, items in MENU_CATS for iid, n in items if iid == item_id),
+        f"#{item_id}"
+    )
+    try:
+        await sl_db_write("DELETE", item_id)
+        stopped = sl_get_stopped()
+        if not stopped:
+            await callback.message.edit_text(
+                "✅ <b>Стоп-лист пуст!</b>\n\nВсе блюда в наличии.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="← Назад к категориям", callback_data="sl_back")]
+                ]),
+                parse_mode="HTML"
+            )
+        else:
+            lines = []
+            for cat_id, cat_name, items in MENU_CATS:
+                cat_stopped = [name for iid, name in items if iid in stopped]
+                if cat_stopped:
+                    lines.append(f"<b>{cat_name}</b>")
+                    lines.extend(f"  ❌ {n}" for n in cat_stopped)
+            await callback.message.edit_text(
+                f"🛑 <b>Сейчас в стопе:</b>\n\n" + "\n".join(lines) +
+                f"\n\n✅ <i>{item_name} — убрано из стопа</i>\n\n👆 Нажмите на блюдо чтобы убрать из стопа:",
+                reply_markup=sl_stopped_kb(stopped), parse_mode="HTML"
+            )
     except Exception as e:
         await callback.message.answer(f"❌ {e}")
     await callback.answer()

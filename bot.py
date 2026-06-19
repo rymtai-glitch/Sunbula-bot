@@ -956,6 +956,21 @@ async def sl_cat(callback: CallbackQuery):
         await callback.message.answer(f"❌ {e}")
     await callback.answer()
 
+async def sl_db_write(method: str, item_id: int):
+    svc_key = os.getenv("SUPABASE_SERVICE_KEY", SUPA_KEY)
+    headers = {
+        "apikey": svc_key,
+        "Authorization": f"Bearer {svc_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    url = f"{SUPA_URL}/rest/v1/menu_stop_list"
+    async with httpx.AsyncClient() as client:
+        if method == "DELETE":
+            await client.delete(f"{url}?menu_id=eq.{item_id}", headers=headers)
+        else:
+            await client.post(url, headers=headers, json={"menu_id": item_id})
+
 @dp.callback_query(F.data.startswith("sl_t:"))
 async def sl_toggle(callback: CallbackQuery):
     parts = callback.data.split(":")
@@ -966,11 +981,11 @@ async def sl_toggle(callback: CallbackQuery):
     try:
         stopped = sl_get_stopped()
         if item_id in stopped:
-            sb.table("menu_stop_list").delete().eq("menu_id", item_id).execute()
+            await sl_db_write("DELETE", item_id)
             stopped.discard(item_id)
             action_text = f"✅ <b>{item_name}</b> — убрано из стоп-листа"
         else:
-            sb.table("menu_stop_list").insert({"menu_id": item_id}).execute()
+            await sl_db_write("POST", item_id)
             stopped.add(item_id)
             action_text = f"❌ <b>{item_name}</b> — добавлено в стоп-лист"
 

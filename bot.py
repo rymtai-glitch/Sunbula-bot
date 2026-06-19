@@ -24,10 +24,13 @@ WEATHER_KEY   = os.getenv("WEATHER_KEY", "")
 if not BOT_TOKEN or not SUPA_URL or not SUPA_KEY:
     raise RuntimeError("Не заданы переменные окружения: BOT_TOKEN, SUPABASE_URL, SUPABASE_KEY. Создайте файл .env")
 
+SUPA_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", SUPA_KEY)
+
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 sb: Client = create_client(SUPA_URL, SUPA_KEY)
+sb_admin: Client = create_client(SUPA_URL, SUPA_SERVICE_KEY)
 
 # ── Access ───────────────────────────────────────────────────────────────────
 ADMIN_ID = 394382908    # @rymtayy (главный)
@@ -102,6 +105,7 @@ def main_kb_staff():
         [KeyboardButton(text="📦 Накладная"), KeyboardButton(text="📊 Отчет")],
         [KeyboardButton(text="🟢 Приход"),    KeyboardButton(text="🔴 Уход")],
         [KeyboardButton(text="💰 Моя зарплата")],
+        [KeyboardButton(text="🛑 Стоп лист")],
     ], resize_keyboard=True)
 
 def main_kb_admin():
@@ -110,6 +114,7 @@ def main_kb_admin():
         [KeyboardButton(text="🟢 Приход"),    KeyboardButton(text="🔴 Уход")],
         [KeyboardButton(text="📈 Аналитика"), KeyboardButton(text="👥 Зарплаты")],
         [KeyboardButton(text="📋 Архив отчетов"), KeyboardButton(text="🤖 AI Контент")],
+        [KeyboardButton(text="🛑 Стоп лист")],
     ], resize_keyboard=True)
 
 def cancel_kb():
@@ -877,6 +882,123 @@ async def ai_content(message: Message):
         + stories
     )
     await message.answer(text, parse_mode="HTML")
+
+# ── СТОП ЛИСТ ─────────────────────────────────────────────────────────────────
+MENU_CATS = [
+    ("breakfast", "🍳 Завтраки",          [(1,"Английский завтрак"),(2,"Скрэмбл с семгой"),(3,"Вафли с семгой"),(4,"Сытный завтрак"),(5,"Шакшука")]),
+    ("porridge",  "🥣 Каши",              [(6,"Овсяная с вишней"),(7,"Рисовая с ягодами")]),
+    ("sweet",     "🧇 Сладкие завтраки",  [(8,"Вафли с мороженым"),(9,"Панкейки"),(10,"Сырники")]),
+    ("salads",    "🥗 Салаты",            [(11,"Цезарь с цыпленком"),(12,"Свежий салат"),(13,"Зелёный с семгой")]),
+    ("bowls",     "🍲 Боулы",             [(14,"Боул с грудкой"),(15,"Боул с семгой")]),
+    ("snacks",    "🥪 Перекусы",          [(16,"Сэндвич с индейкой"),(17,"Сэндвич с семгой"),(18,"Тост с индейкой")]),
+    ("main",      "🍽 Горячее",           [(19,"Шницель"),(20,"Говяжьи рёбрышки"),(21,"Курица в сливочном"),(22,"Судак"),(23,"Имбирный цыплёнок"),(24,"Томлёное мясо"),(25,"Куриные котлеты")]),
+    ("pasta",     "🍝 Паста",             [(26,"Арабьята"),(27,"Феттучини с курицей")]),
+    ("pizza",     "🍕 Пиццы",             [(76,"Сырная пицца"),(28,"Пепперони"),(29,"Грибная с трюфелем"),(30,"Лосось Крем Чиз"),(31,"Терияки Чикен")]),
+    ("soups",     "🍜 Супы",              [(32,"Рамен с индейкой"),(33,"Куриная лапша"),(34,"Чечевичный крем-суп"),(35,"Финский суп"),(36,"Грибной крем-суп")]),
+    ("coffee",    "☕ Кофе",              [(37,"Эспрессо"),(38,"Американо"),(39,"Латте"),(40,"Капучино"),(41,"Флэт-Уайт"),(42,"Раф"),(43,"Матча-латте"),(44,"Какао"),(45,"Горячий шоколад"),(46,"Эспрессо-тоник"),(47,"Мокко")]),
+    ("filter",    "🫗 Фильтр кофе",       [(48,"Батч-брю"),(49,"Колд-брю"),(50,"Колд-брю малина"),(51,"V-60 / Origami")]),
+    ("signature", "🍵 Авторские напитки", [(52,"Нитро-классик"),(53,"Нитро-апельсин"),(55,"Айс-латте Крем-брюлле"),(57,"Матча-манго"),(58,"Матча с малиной"),(60,"Матча бамбл"),(61,"Кофе бамбл"),(62,"Матча-банан")]),
+    ("tea",       "🫖 Авторские чаи",     [(63,"Чёрный чай"),(64,"Зелёный чай"),(65,"Жасмин-цитрус"),(66,"Дары Иссык-Куля"),(67,"Чабрец-малина"),(68,"Персик-лайм"),(69,"Облепиха-апельсин"),(70,"Тары-чай"),(71,"Груша-улун")]),
+    ("lemonade",  "🍋 Лимонады",          [(72,"Персик-Ваниль"),(73,"Малина-маракуйя"),(74,"Экзотик"),(75,"Груша-ананас")]),
+]
+CATS_BY_ID = {c[0]: c for c in MENU_CATS}
+
+def sl_get_stopped() -> set:
+    rows = sb.table("menu_stop_list").select("menu_id").execute()
+    return {int(r["menu_id"]) for r in (rows.data or [])}
+
+def sl_cats_kb() -> InlineKeyboardMarkup:
+    rows = []
+    for i in range(0, len(MENU_CATS), 2):
+        row = [InlineKeyboardButton(text=MENU_CATS[i][1], callback_data=f"sl_c:{MENU_CATS[i][0]}")]
+        if i + 1 < len(MENU_CATS):
+            row.append(InlineKeyboardButton(text=MENU_CATS[i+1][1], callback_data=f"sl_c:{MENU_CATS[i+1][0]}"))
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+def sl_items_kb(cat_id: str, stopped: set) -> InlineKeyboardMarkup:
+    cat = CATS_BY_ID.get(cat_id)
+    if not cat: return InlineKeyboardMarkup(inline_keyboard=[])
+    rows = []
+    for item_id, item_name in cat[2]:
+        icon = "❌" if item_id in stopped else "✅"
+        rows.append([InlineKeyboardButton(text=f"{icon} {item_name}", callback_data=f"sl_t:{item_id}:{cat_id}")])
+    rows.append([InlineKeyboardButton(text="← Назад к категориям", callback_data="sl_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+@dp.message(F.text == "🛑 Стоп лист")
+async def sl_start(message: Message):
+    if not is_admin(message.from_user.id) and get_emp_name(message.from_user.id) is None:
+        return await message.answer("⛔ Нет доступа.")
+    try:
+        stopped = sl_get_stopped()
+        count = len(stopped)
+        await message.answer(
+            f"🛑 <b>Стоп лист</b>\n\nСейчас в стопе: <b>{count}</b> позиций\n\nВыберите категорию:",
+            reply_markup=sl_cats_kb(), parse_mode="HTML"
+        )
+    except Exception as e:
+        await message.answer(f"❌ {e}")
+
+@dp.callback_query(F.data.startswith("sl_c:"))
+async def sl_cat(callback: CallbackQuery):
+    cat_id = callback.data[5:]
+    cat = CATS_BY_ID.get(cat_id)
+    if not cat:
+        await callback.answer("Категория не найдена", show_alert=True)
+        return
+    try:
+        stopped = sl_get_stopped()
+        stopped_in_cat = sum(1 for item_id, _ in cat[2] if item_id in stopped)
+        note = f"\n\n🛑 В стопе: {stopped_in_cat} из {len(cat[2])}" if stopped_in_cat else ""
+        await callback.message.edit_text(
+            f"{cat[1]}\n\n✅ в наличии  ❌ нет в наличии\nНажмите на блюдо чтобы изменить статус:{note}",
+            reply_markup=sl_items_kb(cat_id, stopped)
+        )
+    except Exception as e:
+        await callback.message.answer(f"❌ {e}")
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("sl_t:"))
+async def sl_toggle(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    item_id = int(parts[1])
+    cat_id  = parts[2]
+    cat = CATS_BY_ID.get(cat_id)
+    item_name = next((n for i, n in cat[2] if i == item_id), f"#{item_id}") if cat else f"#{item_id}"
+    try:
+        stopped = sl_get_stopped()
+        if item_id in stopped:
+            sb_admin.table("menu_stop_list").delete().eq("menu_id", item_id).execute()
+            stopped.discard(item_id)
+            action_text = f"✅ <b>{item_name}</b> — убрано из стоп-листа"
+        else:
+            sb_admin.table("menu_stop_list").insert({"menu_id": item_id}).execute()
+            stopped.add(item_id)
+            action_text = f"❌ <b>{item_name}</b> — добавлено в стоп-лист"
+
+        stopped_in_cat = sum(1 for i, _ in cat[2] if i in stopped) if cat else 0
+        note = f"\n\n🛑 В стопе: {stopped_in_cat} из {len(cat[2])}" if stopped_in_cat else ""
+        await callback.message.edit_text(
+            f"{cat[1] if cat else cat_id}\n\n✅ в наличии  ❌ нет в наличии\nНажмите на блюдо чтобы изменить статус:{note}\n\n{action_text}",
+            reply_markup=sl_items_kb(cat_id, stopped), parse_mode="HTML"
+        )
+    except Exception as e:
+        await callback.message.answer(f"❌ {e}")
+    await callback.answer()
+
+@dp.callback_query(F.data == "sl_back")
+async def sl_back(callback: CallbackQuery):
+    try:
+        stopped = sl_get_stopped()
+        count = len(stopped)
+        await callback.message.edit_text(
+            f"🛑 <b>Стоп лист</b>\n\nСейчас в стопе: <b>{count}</b> позиций\n\nВыберите категорию:",
+            reply_markup=sl_cats_kb(), parse_mode="HTML"
+        )
+    except Exception as e:
+        await callback.message.answer(f"❌ {e}")
+    await callback.answer()
 
 # ── Universal cancel handler ───────────────────────────────────────────────────
 @dp.message(F.text == "❌ Отмена")

@@ -715,7 +715,7 @@ async def sal_debt(callback: CallbackQuery):
     try:
         ms = today()[:7]+"-01"
         rows = sb.table("salary_records").select("*").gte("date", ms).execute()
-        debts = {}
+        debts = {name: {"earned": 0, "paid": 0, "fines": 0, "bonuses": 0} for name in EMP_NAMES}
         for r in (rows.data or []):
             emp = r["employee"]
             if emp not in debts: debts[emp] = {"earned": 0, "paid": 0, "fines": 0, "bonuses": 0}
@@ -724,9 +724,6 @@ async def sal_debt(callback: CallbackQuery):
             elif rt == "payment": debts[emp]["paid"]    += r.get("salary", 0) or 0
             elif rt == "fine":    debts[emp]["fines"]   += r.get("salary", 0) or 0
             elif rt == "bonus":   debts[emp]["bonuses"] += r.get("salary", 0) or 0
-        if not debts:
-            await callback.message.answer("За этот месяц данных нет.")
-            await callback.answer(); return
         text = f"💰 <b>Долг по зарплатам — {today()[:7]}</b>\n\n"
         total_debt = 0
         for emp, d in debts.items():

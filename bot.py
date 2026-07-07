@@ -215,9 +215,10 @@ async def ci_photo(message: Message, state: FSMContext):
 
         # 🔔 Уведомление админу
         if not is_admin(message.from_user.id):
-            await bot.send_message(
+            await bot.send_photo(
                 ADMIN_ID,
-                f"🟢 <b>Приход сотрудника</b>\n\n👤 <b>{data['employee']}</b>\n🕐 {data['time']}  📅 {data['date']}",
+                photo=message.photo[-1].file_id,
+                caption=f"🟢 <b>Приход сотрудника</b>\n\n👤 <b>{data['employee']}</b>\n🕐 {data['time']}  📅 {data['date']}",
                 parse_mode="HTML"
             )
     except Exception as e:
@@ -351,9 +352,10 @@ async def co_photo(message: Message, state: FSMContext):
 
         # 🔔 Уведомление админу
         if not is_admin(message.from_user.id):
-            await bot.send_message(
+            await bot.send_photo(
                 ADMIN_ID,
-                f"🔴 <b>Уход сотрудника</b>\n\n👤 <b>{emp}</b>\n🟢 {ci_time or '—'} → 🔴 {data['time']}\n🕐 {hlabel}{slabel}",
+                photo=message.photo[-1].file_id,
+                caption=f"🔴 <b>Уход сотрудника</b>\n\n👤 <b>{emp}</b>\n🟢 {ci_time or '—'} → 🔴 {data['time']}\n🕐 {hlabel}{slabel}",
                 parse_mode="HTML"
             )
     except Exception as e:

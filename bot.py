@@ -79,15 +79,15 @@ def calc_hours(t1, t2):
     except: return 0, 0
 
 def calc_hours_capped(t1, t2):
-    """Считает часы с ограничением 07:00-23:00 (для Дияр и Виктория).
-    Если пришли раньше 07:00 — считаем с 07:00. Если ушли позже 23:00
-    (включая уход после полуночи) — считаем по 23:00."""
+    """Считает часы с ограничением 08:00-00:00.
+    Если пришли раньше 08:00 — считаем с 08:00. Если ушли после 00:00
+    (полночь) — считаем по 00:00."""
     try:
         a = datetime.strptime(t1, "%H:%M")
         b = datetime.strptime(t2, "%H:%M")
         if b < a: b += timedelta(hours=24)
-        cap_start = datetime.strptime("07:00", "%H:%M")
-        cap_end   = datetime.strptime("23:00", "%H:%M")
+        cap_start = datetime.strptime("08:00", "%H:%M")
+        cap_end   = datetime.strptime("00:00", "%H:%M") + timedelta(hours=24)
         a = max(a, cap_start)
         b = min(b, cap_end)
         if b <= a: return 0, 0

@@ -226,8 +226,11 @@ async def ci_photo(message: Message, state: FSMContext):
     await state.clear()
 
 @dp.message(CI.photo, F.photo)
-async def ci_photo_rejected(message: Message):
+async def ci_photo_rejected(message: Message, state: FSMContext):
+    data = await state.get_data()
+    name = data.get("employee", message.from_user.full_name)
     await message.answer("⚠️ Нельзя отправлять фото из галереи.\n🎥 Запишите кружок (видео) прямо сейчас.")
+    await bot.send_message(ADMIN_ID, f"🚨 <b>{name}</b> попытался(ась) отправить фото из галереи при <b>приходе</b>", parse_mode="HTML")
 
 @dp.message(CI.photo, F.text=="❌ Отмена")
 async def ci_cancel(message: Message, state: FSMContext):
@@ -367,8 +370,11 @@ async def co_photo(message: Message, state: FSMContext):
     await state.clear()
 
 @dp.message(CO.photo, F.photo)
-async def co_photo_rejected(message: Message):
+async def co_photo_rejected(message: Message, state: FSMContext):
+    data = await state.get_data()
+    name = data.get("employee", message.from_user.full_name)
     await message.answer("⚠️ Нельзя отправлять фото из галереи.\n🎥 Запишите кружок (видео) прямо сейчас.")
+    await bot.send_message(ADMIN_ID, f"🚨 <b>{name}</b> попытался(ась) отправить фото из галереи при <b>уходе</b>", parse_mode="HTML")
 
 @dp.message(CO.photo, F.text=="❌ Отмена")
 async def co_cancel(message: Message, state: FSMContext):

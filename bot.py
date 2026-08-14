@@ -181,7 +181,7 @@ async def ci_start(message: Message, state: FSMContext):
     if emp_name:
         await state.update_data(employee=emp_name, time=time_s(), date=today())
         await state.set_state(CI.photo)
-        await message.answer("📸 Сделайте фото:", reply_markup=cancel_kb())
+        await message.answer("🎥 Запишите кружок (видео):", reply_markup=cancel_kb())
     elif is_admin(uid_):
         await state.set_state(CI.emp)
         await message.answer("👤 Выберите сотрудника:", reply_markup=emp_inline("ci"))
@@ -194,10 +194,10 @@ async def ci_emp(callback: CallbackQuery, state: FSMContext):
     await state.update_data(employee=emp, time=time_s(), date=today())
     await state.set_state(CI.photo)
     await callback.message.edit_reply_markup()
-    await callback.message.answer("📸 Сделайте фото:", reply_markup=cancel_kb())
+    await callback.message.answer("🎥 Запишите кружок (видео):", reply_markup=cancel_kb())
     await callback.answer()
 
-@dp.message(CI.photo, F.photo)
+@dp.message(CI.photo, F.video_note)
 async def ci_photo(message: Message, state: FSMContext):
     data = await state.get_data()
     try:
@@ -215,15 +215,19 @@ async def ci_photo(message: Message, state: FSMContext):
 
         # 🔔 Уведомление админу
         if not is_admin(message.from_user.id):
-            await bot.send_photo(
+            await bot.send_video_note(ADMIN_ID, video_note=message.video_note.file_id)
+            await bot.send_message(
                 ADMIN_ID,
-                photo=message.photo[-1].file_id,
-                caption=f"🟢 <b>Приход сотрудника</b>\n\n👤 <b>{data['employee']}</b>\n🕐 {data['time']}  📅 {data['date']}",
+                f"🟢 <b>Приход сотрудника</b>\n\n👤 <b>{data['employee']}</b>\n🕐 {data['time']}  📅 {data['date']}",
                 parse_mode="HTML"
             )
     except Exception as e:
         await message.answer(f"❌ {e}", reply_markup=main_kb_staff())
     await state.clear()
+
+@dp.message(CI.photo, F.photo)
+async def ci_photo_rejected(message: Message):
+    await message.answer("⚠️ Нельзя отправлять фото из галереи.\n🎥 Запишите кружок (видео) прямо сейчас.")
 
 @dp.message(CI.photo, F.text=="❌ Отмена")
 async def ci_cancel(message: Message, state: FSMContext):
@@ -243,7 +247,7 @@ async def co_start(message: Message, state: FSMContext):
             await message.answer("Выберите тип смены:", reply_markup=shift_kb(emp_name))
         else:
             await state.set_state(CO.photo)
-            await message.answer("📸 Сделайте фото:", reply_markup=cancel_kb())
+            await message.answer("🎥 Запишите кружок (видео):", reply_markup=cancel_kb())
     elif is_admin(uid_):
         await state.set_state(CO.emp)
         await message.answer("👤 Выберите сотрудника:", reply_markup=emp_inline("co"))
@@ -260,7 +264,7 @@ async def co_emp(callback: CallbackQuery, state: FSMContext):
     if cfg["type"] == "shift":
         await callback.message.answer(f"👤 <b>{emp}</b> — выберите тип смены:", reply_markup=shift_kb(emp), parse_mode="HTML")
     else:
-        await callback.message.answer("📸 Сделайте фото:", reply_markup=cancel_kb())
+        await callback.message.answer("🎥 Запишите кружок (видео):", reply_markup=cancel_kb())
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("sf:") | F.data.startswith("sh:"))
@@ -303,7 +307,7 @@ async def shift_chosen(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.answer()
 
-@dp.message(CO.photo, F.photo)
+@dp.message(CO.photo, F.video_note)
 async def co_photo(message: Message, state: FSMContext):
     data = await state.get_data()
     emp  = data["employee"]
@@ -352,15 +356,19 @@ async def co_photo(message: Message, state: FSMContext):
 
         # 🔔 Уведомление админу
         if not is_admin(message.from_user.id):
-            await bot.send_photo(
+            await bot.send_video_note(ADMIN_ID, video_note=message.video_note.file_id)
+            await bot.send_message(
                 ADMIN_ID,
-                photo=message.photo[-1].file_id,
-                caption=f"🔴 <b>Уход сотрудника</b>\n\n👤 <b>{emp}</b>\n🟢 {ci_time or '—'} → 🔴 {data['time']}\n🕐 {hlabel}{slabel}",
+                f"🔴 <b>Уход сотрудника</b>\n\n👤 <b>{emp}</b>\n🟢 {ci_time or '—'} → 🔴 {data['time']}\n🕐 {hlabel}{slabel}",
                 parse_mode="HTML"
             )
     except Exception as e:
         await message.answer(f"❌ {e}", reply_markup=main_kb_staff())
     await state.clear()
+
+@dp.message(CO.photo, F.photo)
+async def co_photo_rejected(message: Message):
+    await message.answer("⚠️ Нельзя отправлять фото из галереи.\n🎥 Запишите кружок (видео) прямо сейчас.")
 
 @dp.message(CO.photo, F.text=="❌ Отмена")
 async def co_cancel(message: Message, state: FSMContext):

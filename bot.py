@@ -81,9 +81,7 @@ def calc_hours(t1, t2):
     except: return 0, 0
 
 def calc_hours_capped(t1, t2):
-    """Считает часы с ограничением 08:00-00:00.
-    Если пришли раньше 08:00 — считаем с 08:00. Если ушли после 00:00
-    (полночь) — считаем по 00:00."""
+    """Считает часы строго в диапазоне 08:00–00:00. Максимум 16 часов."""
     try:
         a = datetime.strptime(t1, "%H:%M")
         b = datetime.strptime(t2, "%H:%M")
@@ -94,10 +92,11 @@ def calc_hours_capped(t1, t2):
         b = min(b, cap_end)
         if b <= a: return 0, 0
         mins = int((b - a).total_seconds() / 60)
+        mins = min(mins, 16 * 60)
         return mins / 60, mins
     except: return 0, 0
 
-CAPPED_EMPLOYEES = {"Дияр", "Виктория", "Аймира"}
+CAPPED_EMPLOYEES = {"Дияр", "Виктория", "Аймира", "Шако"}
 
 def is_admin(uid_): return uid_ in ADMIN_IDS
 def get_emp_name(uid_): return STAFF.get(uid_)

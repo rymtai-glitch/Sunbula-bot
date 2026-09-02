@@ -64,7 +64,12 @@ EMP_NAMES = list(EMP.keys())
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def tz(): return timedelta(hours=5)
-def today():   return (datetime.utcnow()+tz()).strftime("%Y-%m-%d")
+def today():
+    now = datetime.utcnow() + tz()
+    # До 01:00 ночи считаем рабочим днём предыдущего дня
+    if now.hour < 1:
+        now -= timedelta(days=1)
+    return now.strftime("%Y-%m-%d")
 def now_dt():  return (datetime.utcnow()+tz())
 def now_s():   return now_dt().strftime("%d.%m.%Y %H:%M")
 def time_s():  return now_dt().strftime("%H:%M")

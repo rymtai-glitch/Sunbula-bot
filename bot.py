@@ -38,27 +38,19 @@ STAFF = {
     8981028501: "Динара",
     6854506621: "Бека",
     1123964256: "Виктория",
-    7873998822: "Нурсултан",
-    8224530511: "Азиз",
-    696905506:  "Аймира",
     7133967033: "Шако",
-    912968293:  "Адель",
     1877742979: "Сабина бариста",
 }
 
 # ── Employee config ──────────────────────────────────────────────────────────
 EMP = {
-    "Нурсултан": {"type": "shift",  "full": 25000, "half": 15000},
     "Бека":       {"type": "shift",  "full": 23000, "half": 15000},
-    "Азиз":       {"type": "shift",  "full": 23000, "half": 15000},
     "Куралай":    {"type": "fixed",  "amount": 15000},
     "Дияр":       {"type": "hourly", "rate": 1500},
     "Виктория":   {"type": "hourly", "rate": 1350},
-    "Аймира":     {"type": "hourly", "rate": 1250},
     "Шако":       {"type": "hourly", "rate": 1250},
     "Сабина бариста": {"type": "hourly", "rate": 1400},
     "Динара":     {"type": "count"},
-    "Адель":      {"type": "count"},
 }
 EMP_NAMES = list(EMP.keys())
 
@@ -103,7 +95,7 @@ def calc_hours_capped(t1, t2):
         return mins / 60, mins
     except: return 0, 0
 
-CAPPED_EMPLOYEES = {"Дияр", "Виктория", "Аймира", "Шако", "Сабина бариста"}
+CAPPED_EMPLOYEES = {"Дияр", "Виктория", "Шако", "Сабина бариста"}
 
 def is_admin(uid_): return uid_ in ADMIN_IDS
 def get_emp_name(uid_): return STAFF.get(uid_)

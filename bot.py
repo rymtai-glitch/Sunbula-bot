@@ -1252,10 +1252,60 @@ async def scheduler():
         await asyncio.sleep(wait_seconds)
         await send_morning_report()
 
+PRIORITY_LABELS = {"low": "Низкий", "normal": "Обычный", "high": "Высокий", "urgent": "Срочно!"}
+
+async def task_notifier():
+    """Polls for new assigned tasks and sends Telegram notifications."""
+    while True:
+        try:
+            res = sb.table("tasks").select("*").is_("notified_at", "null").filter("telegram_id", "not.is", "null").execute()
+            logging.info(f"task_notifier: found {len(res.data or [])} pending tasks")
+            for task in (res.data or []):
+                tg_id = task.get("telegram_id")
+                if not tg_id:
+                    continue
+                priority = PRIORITY_LABELS.get(task.get("priority") or "normal", "Обычный")
+                due = task.get("due_date") or "не указан"
+                note = task.get("note") or ""
+                text = (
+                    f"📋 *Новая задача*\n\n"
+                    f"*{task['title']}*\n"
+                    f"⚡ Приоритет: {priority}\n"
+                    f"📅 Срок: {due}"
+                )
+                if note:
+                    text += f"\n💬 {note}"
+                kb = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="✅ Выполнено", callback_data=f"task_done:{task['id']}")
+                ]])
+                try:
+                    await bot.send_message(tg_id, text, parse_mode="Markdown", reply_markup=kb)
+                    sb.table("tasks").update({"notified_at": datetime.utcnow().isoformat()}).eq("id", task["id"]).execute()
+                    logging.info(f"Task notified: {task['id']} → {tg_id}")
+                except Exception as e:
+                    logging.warning(f"Failed to notify task {task['id']}: {e}")
+        except Exception as e:
+            logging.warning(f"task_notifier error: {e}")
+        await asyncio.sleep(30)
+
+@dp.callback_query(F.data.startswith("task_done:"))
+async def cb_task_done(call: CallbackQuery):
+    task_id = call.data.split(":", 1)[1]
+    try:
+        sb.table("tasks").update({"done": True}).eq("id", task_id).execute()
+        await call.message.edit_text(
+            call.message.text + "\n\n✅ *Выполнено!*",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logging.warning(f"cb_task_done error: {e}")
+    await call.answer()
+
 # ── Run ────────────────────────────────────────────────────────────────────────
 async def main():
     logging.info("✅ Sunbula Bot started!")
     asyncio.create_task(scheduler())
+    asyncio.create_task(task_notifier())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

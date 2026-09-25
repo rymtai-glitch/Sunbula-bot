@@ -3,6 +3,7 @@ import logging
 import httpx
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
 from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
@@ -1282,6 +1283,14 @@ async def task_notifier():
                     await bot.send_message(tg_id, text, parse_mode="Markdown", reply_markup=kb)
                     sb.table("tasks").update({"notified_at": datetime.utcnow().isoformat()}).eq("id", task["id"]).execute()
                     logging.info(f"Task notified: {task['id']} → {tg_id}")
+                except (TelegramForbiddenError, TelegramBadRequest) as e:
+                    # User blocked bot or bad request — stop retrying, mark as attempted
+                    err_note = f"[⚠ Не доставлено: {e}]"
+                    sb.table("tasks").update({
+                        "notified_at": datetime.utcnow().isoformat(),
+                        "note": ((task.get("note") or "") + " " + err_note).strip(),
+                    }).eq("id", task["id"]).execute()
+                    logging.warning(f"Permanent failure for task {task['id']} → {tg_id}: {e}")
                 except Exception as e:
                     logging.warning(f"Failed to notify task {task['id']}: {e}")
         except Exception as e:

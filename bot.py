@@ -1,4 +1,5 @@
 import os
+import html
 import logging
 import httpx
 from datetime import datetime, timedelta
@@ -1310,11 +1311,63 @@ async def cb_task_done(call: CallbackQuery):
         logging.warning(f"cb_task_done error: {e}")
     await call.answer()
 
+# ── Orchestra: new business applications ──────────────────────────────────────
+ORG_STATUS_LABELS = {"active": "✅ Одобрено", "rejected": "❌ Отклонено"}
+
+async def org_application_notifier():
+    """Sends each new email-confirmed business sign-up to the platform owner for approval."""
+    while True:
+        try:
+            res = (sb.table("organizations")
+                   .select("id,name,owner_name,owner_email,phone,created_at")
+                   .eq("status", "pending").eq("email_confirmed", True)
+                   .is_("admin_notified_at", "null").execute())
+            for org in (res.data or []):
+                e = lambda v: html.escape(v or "—")
+                text = (
+                    "🏪 <b>Новая заявка в Orchestra</b>\n\n"
+                    f"<b>{e(org.get('name'))}</b>\n"
+                    f"👤 {e(org.get('owner_name'))}\n"
+                    f"📞 {e(org.get('phone'))}\n"
+                    f"✉️ {e(org.get('owner_email'))}"
+                )
+                kb = InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(text="✅ Одобрить", callback_data=f"org_ok:{org['id']}"),
+                    InlineKeyboardButton(text="❌ Отклонить", callback_data=f"org_no:{org['id']}"),
+                ]])
+                try:
+                    await bot.send_message(ADMIN_ID, text, parse_mode="HTML", reply_markup=kb)
+                    sb.table("organizations").update({"admin_notified_at": datetime.utcnow().isoformat()}).eq("id", org["id"]).execute()
+                except Exception as ex:
+                    logging.warning(f"Failed to send org application {org['id']}: {ex}")
+        except Exception as ex:
+            logging.warning(f"org_application_notifier error: {ex}")
+        await asyncio.sleep(30)
+
+@dp.callback_query(F.data.startswith("org_ok:") | F.data.startswith("org_no:"))
+async def cb_org_decision(call: CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        await call.answer("Нет прав", show_alert=True)
+        return
+    action, org_id = call.data.split(":", 1)
+    status = "active" if action == "org_ok" else "rejected"
+    try:
+        res = (sb.table("organizations").update({"status": status})
+               .eq("id", org_id).eq("status", "pending").execute())
+        note = ORG_STATUS_LABELS[status] if res.data else "ℹ️ Заявка уже обработана в приложении"
+        await call.message.edit_text(call.message.html_text + f"\n\n<b>{note}</b>", parse_mode="HTML")
+    except Exception as ex:
+        logging.warning(f"cb_org_decision error: {ex}")
+        await call.answer("Ошибка, попробуйте в приложении", show_alert=True)
+        return
+    await call.answer()
+
 # ── Run ────────────────────────────────────────────────────────────────────────
 async def main():
     logging.info("✅ Sunbula Bot started!")
     asyncio.create_task(scheduler())
     asyncio.create_task(task_notifier())
+    asyncio.create_task(org_application_notifier())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

@@ -34,6 +34,8 @@ sb: Client = create_client(SUPA_URL, SUPA_KEY)
 # ── Access ───────────────────────────────────────────────────────────────────
 ADMIN_ID = 394382908    # @rymtayy (главный)
 ADMIN_IDS = {394382908, 7990145871}  # все админы
+# This bot serves Sunbula only; Orchestra now hosts other businesses in the same database
+SUNBULA_ORG_ID = "c0ffee00-5b1a-4a00-8000-000000000001"
 
 STAFF = {
     740516816:  "Дияр",
@@ -321,7 +323,7 @@ async def co_photo(message: Message, state: FSMContext):
     cfg  = EMP[emp]
     await message.answer("⏳ Обрабатываю...")
     try:
-        ci = sb.table("shifts").select("*").eq("employee", emp).eq("type", "checkin").order("created_at", desc=True).limit(1).execute()
+        ci = sb.table("shifts").select("*").eq("org_id", SUNBULA_ORG_ID).eq("employee", emp).eq("type", "checkin").order("created_at", desc=True).limit(1).execute()
         ci_time = ci.data[0]["time"] if ci.data else None
         ci_date = ci.data[0]["date"] if ci.data else data["date"]
         if emp in CAPPED_EMPLOYEES:
@@ -516,7 +518,7 @@ async def rep_finish(message: Message, state: FSMContext):
                 }).execute()
 
         sb.table("daily_reports").upsert({
-            "id": dt, "date": dt,
+            "id": dt, "date": dt, "org_id": SUNBULA_ORG_ID,
             "cash": d["cash"], "kaspi": d["kaspi"], "glovo": d["glovo"],
             "wolt": d["wolt"], "yandex": d["yandex"],
             "returns": d["ret"], "checks_count": chk,
@@ -526,11 +528,11 @@ async def rep_finish(message: Message, state: FSMContext):
         }).execute()
 
         yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
-        yest = sb.table("daily_reports").select("*").eq("date", yesterday).execute()
+        yest = sb.table("daily_reports").select("*").eq("org_id", SUNBULA_ORG_ID).eq("date", yesterday).execute()
         y = yest.data[0] if yest.data else None
 
         ms = dt[:7] + "-01"
-        mo = sb.table("daily_reports").select("total").gte("date", ms).execute()
+        mo = sb.table("daily_reports").select("total").eq("org_id", SUNBULA_ORG_ID).gte("date", ms).execute()
         mt = sum(r["total"] for r in mo.data) if mo.data else total
         dc = len(mo.data) or 1
 
@@ -685,8 +687,8 @@ async def analytics(message: Message):
         return await message.answer("⛔ Нет доступа.")
     try:
         dt = today(); ms = dt[:7]+"-01"
-        td = sb.table("daily_reports").select("*").eq("date", dt).execute()
-        mo = sb.table("daily_reports").select("*").gte("date", ms).execute()
+        td = sb.table("daily_reports").select("*").eq("org_id", SUNBULA_ORG_ID).eq("date", dt).execute()
+        mo = sb.table("daily_reports").select("*").eq("org_id", SUNBULA_ORG_ID).gte("date", ms).execute()
         t_total = td.data[0]["total"] if td.data else 0
         t_chk   = td.data[0]["checks_count"] if td.data else 0
         t_avg   = td.data[0]["avg_check"] if td.data else 0
@@ -711,7 +713,7 @@ async def archive(message: Message):
     if not is_admin(message.from_user.id):
         return await message.answer("⛔ Нет доступа.")
     try:
-        rows = sb.table("daily_reports").select("*").order("date", desc=True).limit(10).execute()
+        rows = sb.table("daily_reports").select("*").eq("org_id", SUNBULA_ORG_ID).order("date", desc=True).limit(10).execute()
         if not rows.data:
             return await message.answer("Отчетов пока нет.")
         text = "📋 <b>Последние 10 отчетов:</b>\n\n"
@@ -736,7 +738,7 @@ async def sal_debt(callback: CallbackQuery):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
     try:
         ms = today()[:7]+"-01"
-        rows = sb.table("salary_records").select("*").gte("date", ms).execute()
+        rows = sb.table("salary_records").select("*").eq("org_id", SUNBULA_ORG_ID).gte("date", ms).execute()
         debts = {name: {"earned": 0, "paid": 0, "fines": 0, "bonuses": 0} for name in EMP_NAMES}
         for r in (rows.data or []):
             emp = r["employee"]
@@ -830,7 +832,7 @@ async def sal_history(callback: CallbackQuery):
     if not is_admin(callback.from_user.id):
         return await callback.answer("⛔ Нет доступа.", show_alert=True)
     try:
-        rows = sb.table("salary_records").select("*").order("created_at", desc=True).limit(20).execute()
+        rows = sb.table("salary_records").select("*").eq("org_id", SUNBULA_ORG_ID).order("created_at", desc=True).limit(20).execute()
         if not rows.data:
             await callback.message.answer("История пуста.")
             await callback.answer(); return
@@ -851,7 +853,7 @@ async def my_salary(message: Message):
         return await message.answer("⛔ Нет доступа.")
     try:
         ms = today()[:7]+"-01"
-        rows = sb.table("salary_records").select("*").eq("employee", emp).gte("date", ms).execute()
+        rows = sb.table("salary_records").select("*").eq("org_id", SUNBULA_ORG_ID).eq("employee", emp).gte("date", ms).execute()
         earned = 0; paid = 0; fines = 0; bonuses = 0; shifts = 0
         for r in (rows.data or []):
             rt = r.get("rate_type", "")
@@ -886,10 +888,10 @@ async def ai_content(message: Message):
     await message.answer("⏳ Генерирую контент, подожди 10-15 секунд...")
     weather = await get_weather()
     dt = today()
-    rows = sb.table("daily_reports").select("*").eq("date", dt).execute()
+    rows = sb.table("daily_reports").select("*").eq("org_id", SUNBULA_ORG_ID).eq("date", dt).execute()
     if not rows.data:
         yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
-        rows = sb.table("daily_reports").select("*").eq("date", yesterday).execute()
+        rows = sb.table("daily_reports").select("*").eq("org_id", SUNBULA_ORG_ID).eq("date", yesterday).execute()
     report = rows.data[0] if rows.data else {}
     stories = await generate_stories(weather, report)
     sep = "—" * 26
@@ -1199,7 +1201,7 @@ async def generate_stories(weather: str, report: dict) -> str:
 async def send_morning_report():
     try:
         yesterday = (now_dt() - timedelta(days=1)).strftime("%Y-%m-%d")
-        rows = sb.table("daily_reports").select("*").eq("date", yesterday).execute()
+        rows = sb.table("daily_reports").select("*").eq("org_id", SUNBULA_ORG_ID).eq("date", yesterday).execute()
         report = rows.data[0] if rows.data else {}
 
         weather = await get_weather()
@@ -1260,7 +1262,8 @@ async def task_notifier():
     """Polls for new assigned tasks and sends Telegram notifications."""
     while True:
         try:
-            res = sb.table("tasks").select("*").is_("notified_at", "null").filter("telegram_id", "not.is", "null").execute()
+            res = (sb.table("tasks").select("*").eq("org_id", SUNBULA_ORG_ID)
+                   .is_("notified_at", "null").filter("telegram_id", "not.is", "null").execute())
             logging.info(f"task_notifier: found {len(res.data or [])} pending tasks")
             for task in (res.data or []):
                 tg_id = task.get("telegram_id")
